@@ -1,0 +1,6 @@
+image_path,peso_kg,raza
+data/calibracion/animal_001.jpg,420.5,angus
+data/calibracion/animal_002.jpg,380.0,hereford
+data/calibracion/animal_003.jpg,450.2,brangus
+data/calibracion/animal_004.jpg,510.7,braford
+data/calibracion/animal_005.jpg,395.0,angus

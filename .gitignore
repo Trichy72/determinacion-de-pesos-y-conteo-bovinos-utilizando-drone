@@ -1,0 +1,80 @@
+# =====================================================================
+# .gitignore — HMS Nutrición Animal
+# Todo lo que está acá NO se sube a GitHub. Nos protege de:
+#   1) filtrar contraseñas SMTP, WhatsApp, WeatherAPI, Anthropic
+#   2) filtrar datos privados de clientes (cattle_tracker.db, fotos)
+#   3) subir archivos pesados innecesarios (venv, modelos YOLO)
+# =====================================================================
+
+# ─── Entornos virtuales de Python ───
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ─── Base de datos con datos reales de clientes ───
+# NUNCA subir esto a un repo público. Los datos de clientes viven
+# solamente en tu Mac y (más adelante) en Supabase.
+data/*.db
+data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+
+# ─── Fotos de clientes / lotes ───
+# Datos privados. Van a Cloudflare R2 más adelante, no a git.
+data/fotos_lote/
+uploads/
+
+# ─── Credenciales y config sensibles ───
+# TODOS los *_config.json tienen tokens/contraseñas. Nunca a git.
+data/smtp_config.json
+data/whatsapp_config.json
+data/weatherapi_config.json
+data/imap_config.json
+data/anthropic_config.json
+data/agent_memory.json
+data/*.key
+data/*.pem
+# Cualquier archivo oculto dentro de data/ es sensible por defecto
+# (ej: data/.api_key con clave Anthropic, data/.carga_secret HMAC).
+# El .gitignore común "data/*.key" NO matchea ".api_key" porque
+# empieza con punto — ¡bug de glob típico!
+data/.*
+.env
+.env.*
+!.env.example
+
+# ─── Modelos YOLO (se bajan solos con ultralytics) ───
+# Pesan ~160 MB juntos, no tiene sentido subirlos al repo.
+*.pt
+*.pth
+*.onnx
+yolov8*.pt
+
+# ─── Logs y runs ───
+data/logs/
+runs/
+logs/
+*.log
+
+# ─── Salidas de trabajo temporales ───
+diagnostico_output/
+outputs/
+tmp/
+.DS_Store
+Thumbs.db
+
+# ─── PDFs generados (se regeneran on-demand) ───
+*.pdf
+!assets/*.pdf
+!docs/*.pdf
+
+# ─── Backups ───
+# La red de seguridad vive local, NO en git.
+backups/

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hms.informe-demanda-semanal</string>
+
+    <!-- Cron semanal — lunes 8:00 AM. Manda al ADMIN un email por
+         cada cliente activo con la demanda diaria/semanal/mensual de
+         insumos por lote y total cliente. Es INTERNO: no se manda al
+         cliente, solo a Mauricio para planificar la logística. -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REEMPLAZAR_RUTA_PROYECTO/.venv/bin/python3</string>
+        <string>REEMPLAZAR_RUTA_PROYECTO/scripts/informe_demanda_semanal.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>REEMPLAZAR_RUTA_PROYECTO</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- IMPORTANTE: los logs deben estar FUERA de ~/Documents/ porque
+         macOS TCC bloquea a launchd para escribir ahí — causa exit
+         EX_CONFIG (78) antes de que Python arranque. -->
+    <key>StandardOutPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-demanda-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-demanda-stderr.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hms.alertas-rescate</string>
+
+    <!-- Cron de rescate a las 8:30 AM. Si el de las 8:00 ya envió todo,
+         el dedup en la DB skipea naturalmente. Si Open-Meteo estaba caído
+         a las 8:00, este reintento manda lo que faltó. -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REEMPLAZAR_RUTA_PROYECTO/.venv/bin/python3</string>
+        <string>REEMPLAZAR_RUTA_PROYECTO/scripts/alertas_diarias.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>REEMPLAZAR_RUTA_PROYECTO</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <!-- IMPORTANTE: los logs deben estar FUERA de ~/Documents/ porque
+         macOS TCC bloquea a launchd para escribir ahí — causa exit
+         EX_CONFIG (78) antes de que Python arranque. -->
+    <key>StandardOutPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-rescate-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-rescate-stderr.log</string>
+
+    <!-- Si la Mac estaba apagada/dormida, ejecuta al cargar.
+         El dedup en la DB evita duplicar envíos del día. -->
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

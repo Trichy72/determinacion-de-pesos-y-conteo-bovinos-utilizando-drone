@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hms.alertas-semanales-update</string>
+
+    <!-- Cron miércoles 7:30 — update del pronóstico semanal.
+         Compara contra el snapshot del lunes y solo manda email si
+         hay cambios significativos. Si la semana viene tal cual se
+         previó, silencio total. -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REEMPLAZAR_RUTA_PROYECTO/.venv/bin/python3</string>
+        <string>REEMPLAZAR_RUTA_PROYECTO/scripts/alertas_semanales_update.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>REEMPLAZAR_RUTA_PROYECTO</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>3</integer>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <!-- IMPORTANTE: los logs deben estar FUERA de ~/Documents/ porque
+         macOS TCC bloquea a launchd para escribir ahí — causa exit
+         EX_CONFIG (78) antes de que Python arranque. -->
+    <key>StandardOutPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-semanal-update-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-semanal-update-stderr.log</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

@@ -1,0 +1,16 @@
+# Configuración de Streamlit
+# Para tomar efecto, hay que reiniciar `streamlit run app.py`
+
+[server]
+# Tamaño máximo de archivo subido en MB (default: 200)
+# Subido a 2000 MB (2 GB) para soportar videos 4K largos
+maxUploadSize = 2000
+
+# Tamaño máximo del mensaje WebSocket en MB (default: 200)
+maxMessageSize = 2000
+
+# Headless (no abrir navegador automáticamente). Comentar si querés que abra solo.
+# headless = true
+
+[browser]
+gatherUsageStats = false

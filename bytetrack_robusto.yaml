@@ -1,0 +1,11 @@
+# Configuración ByteTrack optimizada para video aéreo de bovinos.
+# - track_buffer alto: mantiene IDs durante oclusiones por polvo/sombra
+# - track_low_thresh bajo: re-identifica animales con detección débil
+# - new_track_thresh moderado: no crea IDs nuevos por cualquier ruido
+tracker_type: bytetrack
+track_high_thresh: 0.30
+track_low_thresh: 0.10
+new_track_thresh: 0.40
+track_buffer: 60       # frames que se "recuerda" un ID perdido (default 30)
+match_thresh: 0.85
+fuse_score: True

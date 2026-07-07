@@ -1,0 +1,74 @@
+# =====================================================================
+# Configuración del sistema de conteo y estimación de peso bovino
+# =====================================================================
+
+captura:
+  altura_vuelo_m: 10.0          # Altura aproximada del drone
+  resolucion: [3840, 2160]       # 4K
+  fps: 30
+  angulo_camara_grados: 90       # Cenital (nadir)
+
+referencia:
+  # El cuadrado de referencia en el piso (lado en metros)
+  lado_m: 1.02
+  # Método de detección preferido: "aruco" o "color_square"
+  metodo: "color_square"
+  aruco_dict: "DICT_4X4_50"      # Si usás marcadores ArUco
+  aruco_id: 0
+  # Si usás un cuadrado de color sólido. Por defecto: ROSA / FUCSIA / MAGENTA
+  # Otros presets:
+  #   amarillo: min [20,100,100]  max [35,255,255]
+  #   naranja:  min [5,150,150]   max [18,255,255]
+  #   verde:    min [40,80,80]    max [80,255,255]
+  #   azul:     min [100,150,80]  max [130,255,255]
+  #   rojo:     min [0,150,80]    max [10,255,255]   (también min [170,150,80] max [179,255,255])
+  color_hsv_min: [140, 60, 80]
+  color_hsv_max: [175, 255, 255]
+
+deteccion:
+  modelo: "yolov8m.pt"           # YOLOv8 medium (mejor para vista cenital)
+  # Para vista aérea, COCO no es ideal: las vacas suelen clasificarse como
+  # sheep/horse/bear/dog. Por eso aceptamos esas clases también.
+  conf_threshold: 0.15           # Bajo para captar vista cenital
+  iou_threshold: 0.5
+  clase_cow_id: 19               # COCO id para 'cow' (referencia)
+  clases_bovino_aerea: [17, 18, 19, 20, 21, 22, 23]
+  # 17=dog, 18=horse, 19=cow, 20=sheep, 21=elephant, 22=bear, 23=zebra
+  imgsz: 1280                    # Tamaño de inferencia
+
+tracking:
+  tracker: "botsort_robusto.yaml"     # BoT-SORT > ByteTrack para animales rápidos similares entre sí
+  persist: true
+
+estimacion_peso:
+  # Modelo alométrico:  Peso (kg) = a * Area_m2^b * factor_raza + c
+  # Coeficientes por defecto basados en literatura (Tasdemir et al.,
+  # Cominotte et al.) para vacunos vistos desde arriba a 10m.
+  # CALIBRAR con tu dataset usando scripts/calibrate_weight.py
+  modelo: "potencia"             # "potencia" | "lineal" | "polinomial"
+  coef_a: 220.0                  # kg / m^(2b)
+  coef_b: 1.20
+  offset_c: 0.0
+  factores_raza:
+    angus: 1.00
+    hereford: 0.97
+    brangus: 1.05
+    braford: 1.03
+    cruza: 1.00
+    desconocido: 1.00
+  # Rango de validación – descartar detecciones cuya área proyectada
+  # caiga fuera de estos límites (probables falsos positivos)
+  area_min_m2: 0.5
+  area_max_m2: 3.5
+  peso_min_kg: 80
+  peso_max_kg: 1100
+
+salida:
+  dibujar_referencia: true
+  dibujar_id: true
+  dibujar_peso: true
+  fuente_escala: 0.7
+  grosor_caja: 2
+  color_caja_bgr: [0, 255, 0]
+  color_texto_bgr: [255, 255, 255]
+  color_referencia_bgr: [0, 165, 255]

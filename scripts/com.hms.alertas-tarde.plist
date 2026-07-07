@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hms.alertas-tarde</string>
+
+    <!-- Cron de las 18:00 — pronóstico nocturno HMS.
+         Solo manda si hay alertas warning/critica para esa noche /
+         madrugada / mañana siguiente (frío, tormenta, viento, etc).
+         Si está todo tranquilo, no manda nada. -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REEMPLAZAR_RUTA_PROYECTO/.venv/bin/python3</string>
+        <string>REEMPLAZAR_RUTA_PROYECTO/scripts/alertas_tarde.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>REEMPLAZAR_RUTA_PROYECTO</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>18</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- IMPORTANTE: los logs deben estar FUERA de ~/Documents/ porque
+         macOS TCC bloquea a launchd para escribir ahí — causa exit
+         EX_CONFIG (78) antes de que Python arranque. -->
+    <key>StandardOutPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-tarde-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-tarde-stderr.log</string>
+
+    <!-- Si la Mac estaba apagada/dormida a las 18:00, ejecuta al cargar
+         (al arrancar la Mac). El dedup en la DB evita duplicar envíos. -->
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

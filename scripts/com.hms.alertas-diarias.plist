@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hms.alertas-diarias</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REEMPLAZAR_RUTA_PROYECTO/.venv/bin/python3</string>
+        <string>REEMPLAZAR_RUTA_PROYECTO/scripts/alertas_diarias.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>REEMPLAZAR_RUTA_PROYECTO</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- IMPORTANTE: los logs deben estar FUERA de ~/Documents/ porque
+         macOS TCC bloquea a launchd para escribir ahí — causa exit
+         EX_CONFIG (78) antes de que Python arranque. -->
+    <key>StandardOutPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-diarias-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>REEMPLAZAR_HOME/Library/Logs/HMS/launchd-diarias-stderr.log</string>
+
+    <!-- Si la Mac estaba apagada/dormida a la hora programada, ejecuta al
+         cargar el plist (al arrancar la Mac). El dedup en la DB evita que
+         se mande dos veces el mismo día. -->
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

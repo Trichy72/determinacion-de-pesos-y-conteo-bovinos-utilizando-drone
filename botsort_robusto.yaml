@@ -1,0 +1,19 @@
+# BoT-SORT optimizado para video aéreo de bovinos pasando rápido.
+# Diferencias vs ByteTrack:
+#   - Re-identificación por features visuales (mejor cuando los animales
+#     son similares entre sí - mismo color/raza)
+#   - Camera motion compensation (útil si el drone tiembla)
+#   - track_buffer alto: tolera oclusiones largas
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.08
+new_track_thresh: 0.30
+track_buffer: 90        # frames que se "recuerda" un ID perdido (default 30)
+match_thresh: 0.85
+fuse_score: True
+
+# BoT-SORT específico
+gmc_method: sparseOptFlow   # Compensación de movimiento de cámara
+proximity_thresh: 0.5
+appearance_thresh: 0.25
+with_reid: False         # ReID requiere modelo extra; desactivado por velocidad
