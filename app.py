@@ -1583,6 +1583,11 @@ def load_config(path: str = "config.yaml") -> dict:
 @st.cache_resource(show_spinner="Cargando modelo YOLO…")
 def load_detector(model_path: str, cow_class_id: int, conf: float, iou: float,
                   imgsz: int, modo_tropa_densa: bool = False):
+    # En Streamlit Cloud (lite) no está CattleDetector porque cv2/YOLO
+    # no se instalan. Devolvemos None y las pestañas del drone quedan
+    # deshabilitadas con un mensaje.
+    if not _DRONE_LIBS_OK or CattleDetector is None:
+        return None
     return CattleDetector(
         model_path=model_path,
         cow_class_id=cow_class_id,
