@@ -211,15 +211,17 @@ def get_conn(db_path: Optional[Path] = None):
 def init_db(db_path: Optional[Path] = None) -> None:
     """Crea las tablas si no existen + aplica migraciones.
 
-    En Postgres, saltea las migraciones inline (usan PRAGMA table_info
-    que es SQLite-only). En Postgres las tablas ya están completas
-    porque las creamos con el script scripts/migrar_sqlite_a_supabase.py.
+    En Postgres saltea TODO (incluido executescript). Las tablas ya
+    fueron creadas con scripts/migrar_sqlite_a_supabase.py. Correr el
+    SCHEMA de SQLite contra Postgres tira SyntaxError porque los tipos
+    y sintaxis difieren aunque tengan IF NOT EXISTS.
     """
+    # Postgres: no correr executescript ni migraciones inline (ambos
+    # usan sintaxis SQLite-only). Salir temprano.
+    if _usando_postgres():
+        return
     with get_conn(db_path) as conn:
         conn.executescript(SCHEMA)
-        # Migraciones SQLite-only: saltear si el backend es Postgres
-        if _usando_postgres():
-            return
         # Migraciones: agregar columnas que pueden faltar en DBs viejas
         try:
             existing_cols = {row["name"] for row in conn.execute(
