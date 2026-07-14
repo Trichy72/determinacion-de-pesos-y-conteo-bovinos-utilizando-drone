@@ -171,6 +171,24 @@ def armar_nombre_pdf(
 # Módulos que dependen de cv2/ultralytics — solo importables si _DRONE_LIBS_OK.
 # En Streamlit Cloud estos NO se instalan (ver requirements-cloud.txt) y la
 # pestaña drone queda deshabilitada. En local funciona normal.
+#
+# Cuando NO están disponibles, en vez de None usamos "stubs" — clases y
+# funciones que aceptan cualquier argumento y devuelven None. Así, todo
+# código que hace `WeightModel.from_config(...)` o `CattleDetector(...)`
+# devuelve None en lugar de tirar AttributeError/TypeError.
+class _DroneStub:
+    """Clase dummy que devuelve None para cualquier método/atributo/llamada."""
+    def __init__(self, *args, **kwargs):
+        pass
+    def __call__(self, *args, **kwargs):
+        return None
+    def __getattr__(self, name):
+        return _DroneStub()
+
+def _drone_stub_fn(*args, **kwargs):
+    """Función dummy que siempre devuelve None."""
+    return None
+
 if _DRONE_LIBS_OK:
     try:
         from src.calibration import calibrate, calibrate_from_altitude
@@ -183,15 +201,15 @@ if _DRONE_LIBS_OK:
         from src.weight_estimator import WeightModel
     except Exception:
         _DRONE_LIBS_OK = False
-        calibrate = calibrate_from_altitude = None
-        CattleDetector = None
-        export_results_csv = process_image = process_video = None
-        WeightModel = None
+        calibrate = calibrate_from_altitude = _drone_stub_fn
+        CattleDetector = _DroneStub
+        export_results_csv = process_image = process_video = _drone_stub_fn
+        WeightModel = _DroneStub
 else:
-    calibrate = calibrate_from_altitude = None
-    CattleDetector = None
-    export_results_csv = process_image = process_video = None
-    WeightModel = None
+    calibrate = calibrate_from_altitude = _drone_stub_fn
+    CattleDetector = _DroneStub
+    export_results_csv = process_image = process_video = _drone_stub_fn
+    WeightModel = _DroneStub
 from src.nutritional_analysis import (
     analizar_uniformidad, calcular_requerimientos, proyectar_peso,
     ajustar_req_por_dmi,
@@ -1863,7 +1881,11 @@ detector = load_detector(
     modo_tropa_densa=modo_tropa_densa,
 )
 
-if weight_json:
+if not _DRONE_LIBS_OK or WeightModel is None:
+    # Modo lite (Streamlit Cloud): sin YOLO no hay estimación de peso.
+    # Las pestañas del drone van a mostrar mensaje de "no disponible".
+    weight_model = None
+elif weight_json:
     import json
     weight_model = WeightModel(**json.loads(weight_json))
 else:
