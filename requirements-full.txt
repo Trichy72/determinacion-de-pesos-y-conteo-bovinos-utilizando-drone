@@ -1,0 +1,44 @@
+# Core ML / CV
+ultralytics>=8.2.0          # YOLOv8 + tracking (ByteTrack/BoT-SORT)
+opencv-python>=4.9.0
+opencv-contrib-python>=4.9.0  # ArUco
+numpy>=1.26.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+scipy>=1.11.0
+
+# UI Web
+streamlit>=1.32.0
+streamlit-extras>=0.4.0
+
+# Utilidades
+Pillow>=10.0.0
+PyYAML>=6.0
+tqdm>=4.66.0
+matplotlib>=3.8.0
+
+# Export / video codecs (ffmpeg debe instalarse a nivel sistema)
+imageio>=2.34.0
+imageio-ffmpeg>=0.4.9
+
+# Generación de reportes PDF profesionales
+reportlab>=4.0.0
+
+# Agente IA (Claude API)
+anthropic>=0.40.0
+
+# Base de datos remota (Postgres en Supabase — cuando DATABASE_URL está seteado)
+psycopg2-binary>=2.9.0
+
+# WhatsApp (Twilio)
+twilio>=8.0.0
+
+# Mapa interactivo para seleccionar coordenadas (OpenStreetMap, gratis)
+folium>=0.15.0
+streamlit-folium>=0.15.0
+
+# Scraping de sitios oficiales (estaciones meteorológicas La Pampa)
+beautifulsoup4>=4.12.0
+
+# Certificados raíz para SMTP / HTTPS (fix macOS SSL CERTIFICATE_VERIFY_FAILED)
+certifi>=2024.0.0

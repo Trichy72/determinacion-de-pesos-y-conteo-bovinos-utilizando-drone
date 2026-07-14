@@ -218,7 +218,17 @@ from src.mapa_widget import render_mapa_seleccion
 from src import agent_memory as memoria
 from src import database as db
 from src import dashboard
-from src import training_helper as training
+# training_helper importa cv2 → solo cargarlo si _DRONE_LIBS_OK.
+# En Streamlit Cloud lite queda deshabilitado y la pestaña de
+# entrenamiento del drone no está disponible.
+if _DRONE_LIBS_OK:
+    try:
+        from src import training_helper as training
+    except Exception:
+        training = None
+        _DRONE_LIBS_OK = False
+else:
+    training = None
 db.init_db()
 
 
