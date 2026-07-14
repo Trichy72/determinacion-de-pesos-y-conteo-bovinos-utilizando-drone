@@ -17,7 +17,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import cv2
+# cv2 / OpenCV solo se usa para la pestaña de drone (conteo por video).
+# En Streamlit Cloud NO lo instalamos para no pasarnos del límite de RAM.
+# Si el import falla, deshabilitamos la pestaña drone pero el resto de la
+# app (nutrición, dietas, alertas, clientes) sigue funcionando.
+try:
+    import cv2  # noqa: F401
+    _DRONE_LIBS_OK = True
+except Exception as _e_cv2:
+    cv2 = None  # placeholder para que las referencias no rompan al parsear
+    _DRONE_LIBS_OK = False
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -158,14 +168,30 @@ def armar_nombre_pdf(
     partes = [p for p in partes if p]
     return "_".join(partes) + ".pdf"
 
-from src.calibration import calibrate, calibrate_from_altitude
-from src.detector import CattleDetector
-from src.processor import (
-    export_results_csv,
-    process_image,
-    process_video,
-)
-from src.weight_estimator import WeightModel
+# Módulos que dependen de cv2/ultralytics — solo importables si _DRONE_LIBS_OK.
+# En Streamlit Cloud estos NO se instalan (ver requirements-cloud.txt) y la
+# pestaña drone queda deshabilitada. En local funciona normal.
+if _DRONE_LIBS_OK:
+    try:
+        from src.calibration import calibrate, calibrate_from_altitude
+        from src.detector import CattleDetector
+        from src.processor import (
+            export_results_csv,
+            process_image,
+            process_video,
+        )
+        from src.weight_estimator import WeightModel
+    except Exception:
+        _DRONE_LIBS_OK = False
+        calibrate = calibrate_from_altitude = None
+        CattleDetector = None
+        export_results_csv = process_image = process_video = None
+        WeightModel = None
+else:
+    calibrate = calibrate_from_altitude = None
+    CattleDetector = None
+    export_results_csv = process_image = process_video = None
+    WeightModel = None
 from src.nutritional_analysis import (
     analizar_uniformidad, calcular_requerimientos, proyectar_peso,
     ajustar_req_por_dmi,

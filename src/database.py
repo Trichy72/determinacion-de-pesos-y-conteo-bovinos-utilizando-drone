@@ -182,26 +182,44 @@ CREATE INDEX IF NOT EXISTS idx_entregas_lote
 # =====================================================================
 # CONEXIÓN
 # =====================================================================
+# NOTA: get_conn() ahora delega en src/db_backend.py, que decide entre
+# SQLite y Postgres (Supabase) según la variable de entorno DATABASE_URL.
+#
+# - Sin DATABASE_URL → SQLite local (comportamiento original, default).
+# - Con DATABASE_URL → Postgres. El backend traduce automáticamente
+#   los placeholders `?` → `%s` y adapta el resto de diferencias.
+#
+# El resto del código NO cambia: sigue haciendo `with get_conn() as
+# conn: conn.execute("... WHERE x = ?", (val,))`.
+#
+# Rollback plan: borrás DATABASE_URL del .env → vuelve todo a SQLite.
+
+from src.db_backend import (
+    get_conn as _get_conn_backend,
+    usando_postgres as _usando_postgres,
+    backend_activo as _backend_activo,
+)
+
 
 @contextmanager
 def get_conn(db_path: Optional[Path] = None):
-    """Context manager para conexión SQLite. Crea el archivo si no existe."""
-    path = db_path or DB_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
+    """Context manager que devuelve la conexión activa (SQLite o Postgres)."""
+    with _get_conn_backend(db_path) as conn:
         yield conn
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def init_db(db_path: Optional[Path] = None) -> None:
-    """Crea las tablas si no existen + aplica migraciones."""
+    """Crea las tablas si no existen + aplica migraciones.
+
+    En Postgres, saltea las migraciones inline (usan PRAGMA table_info
+    que es SQLite-only). En Postgres las tablas ya están completas
+    porque las creamos con el script scripts/migrar_sqlite_a_supabase.py.
+    """
     with get_conn(db_path) as conn:
         conn.executescript(SCHEMA)
+        # Migraciones SQLite-only: saltear si el backend es Postgres
+        if _usando_postgres():
+            return
         # Migraciones: agregar columnas que pueden faltar en DBs viejas
         try:
             existing_cols = {row["name"] for row in conn.execute(

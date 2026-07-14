@@ -27,6 +27,12 @@ reportlab>=4.0.0
 # Agente IA (Claude API)
 anthropic>=0.40.0
 
+# Base de datos remota (Postgres en Supabase — cuando DATABASE_URL está seteado)
+psycopg2-binary>=2.9.0
+
+# WhatsApp (Twilio)
+twilio>=8.0.0
+
 # Mapa interactivo para seleccionar coordenadas (OpenStreetMap, gratis)
 folium>=0.15.0
 streamlit-folium>=0.15.0

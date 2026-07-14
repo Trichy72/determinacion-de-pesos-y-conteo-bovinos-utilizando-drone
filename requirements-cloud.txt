@@ -1,0 +1,51 @@
+# =====================================================================
+# Dependencias para deploy en Streamlit Cloud (versión "lite")
+# =====================================================================
+# Excluye ultralytics/cv2/torch (pestaña drone) para que la app entre
+# en el límite de RAM del free tier (~1 GB). La pestaña drone queda
+# deshabilitada automáticamente por app.py (try/except al importar).
+#
+# El sistema principal (nutrición, dietas, alertas, clientes, ficha
+# clínica, análisis IA) NO usa esas libs, así que anda igual.
+#
+# En tu Mac de desarrollo seguí usando requirements.txt (completo).
+# =====================================================================
+
+# ─── Datos y utilidades base ───
+numpy>=1.26.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+scipy>=1.11.0
+
+# ─── UI Web ───
+streamlit>=1.32.0
+streamlit-extras>=0.4.0
+
+# ─── Base de datos (Postgres en Supabase) ───
+psycopg2-binary>=2.9.0
+
+# ─── Utilidades ───
+Pillow>=10.0.0
+PyYAML>=6.0
+tqdm>=4.66.0
+matplotlib>=3.8.0
+
+# ─── PDFs profesionales ───
+reportlab>=4.0.0
+
+# ─── LLM (Claude API) ───
+anthropic>=0.40.0
+
+# ─── Mapa interactivo (OpenStreetMap, gratis) ───
+folium>=0.15.0
+streamlit-folium>=0.15.0
+
+# ─── Scraping estaciones meteorológicas ───
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+
+# ─── SSL fixes ───
+certifi>=2024.0.0
+
+# ─── WhatsApp (Twilio) ───
+twilio>=8.0.0

@@ -50,6 +50,10 @@ data/.*
 .env.*
 !.env.example
 
+# ─── Secrets de Streamlit Cloud (local overrides) ───
+# El archivo real con credenciales NO va a git. La plantilla .example sí.
+.streamlit/secrets.toml
+
 # ─── Modelos YOLO (se bajan solos con ultralytics) ───
 # Pesan ~160 MB juntos, no tiene sentido subirlos al repo.
 *.pt
