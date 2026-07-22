@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -48,14 +49,36 @@ SANDBOX_FROM = "+14155238886"
 # CONFIG
 # =====================================================================
 
+def _cargar_wa_desde_env() -> Optional[Dict]:
+    """Fallback env vars para GitHub Actions / Streamlit Cloud."""
+    sid = os.getenv("TWILIO_ACCOUNT_SID")
+    tok = os.getenv("TWILIO_AUTH_TOKEN")
+    frm = os.getenv("TWILIO_FROM_NUMBER")
+    if not (sid and tok and frm):
+        return None
+    modo_sandbox = str(
+        os.getenv("TWILIO_MODO_SANDBOX", "false")
+    ).strip().lower() in ("1", "true", "yes", "si", "sí")
+    return {
+        "provider": "twilio",
+        "account_sid": sid,
+        "auth_token": tok,
+        "from_number": frm,
+        "admin_phone": os.getenv("TWILIO_ADMIN_PHONE", ""),
+        "modo_sandbox": modo_sandbox,
+        "carga_base_url": os.getenv("CARGA_BASE_URL", ""),
+    }
+
+
 def cargar_config() -> Optional[Dict]:
-    if not CONFIG_PATH.exists():
-        return None
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+    """Prioridad: archivo JSON local → env vars → None."""
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return _cargar_wa_desde_env()
 
 
 def guardar_config(cfg: Dict) -> None:

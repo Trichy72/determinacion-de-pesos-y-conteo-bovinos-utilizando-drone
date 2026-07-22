@@ -17,6 +17,7 @@ resolución por ser modelo numérico). WeatherAPI lo usamos solo para `alerts`.
 from __future__ import annotations
 
 import json
+import os
 import ssl
 import urllib.error
 import urllib.parse
@@ -34,13 +35,17 @@ URL_FORECAST = "https://api.weatherapi.com/v1/forecast.json"
 # =====================================================================
 
 def cargar_config() -> Optional[Dict]:
-    if not CONFIG_PATH.exists():
-        return None
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+    """Prioridad: archivo JSON local → env var WEATHERAPI_KEY → None."""
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+    key = os.getenv("WEATHERAPI_KEY")
+    if key:
+        return {"api_key": key}
+    return None
 
 
 def guardar_config(cfg: Dict) -> None:

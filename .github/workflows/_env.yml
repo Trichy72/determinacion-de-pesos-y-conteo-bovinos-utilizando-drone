@@ -1,0 +1,39 @@
+# Nota: este archivo NO es un workflow (empieza con _), lo tenemos
+# como referencia de las env vars que cada workflow debe pasar a los
+# scripts. Los workflows individuales (alertas_*.yml, etc.) declaran
+# el mismo bloque `env:` en cada job.
+#
+# Secretos que hay que cargar UNA vez en:
+#   GitHub → Settings → Secrets and variables → Actions → New secret
+#
+# Base
+#   DATABASE_URL              postgresql://... (Supabase session pooler)
+#   ANTHROPIC_API_KEY         sk-ant-...
+#
+# SMTP (emails)
+#   SMTP_HOST                 smtp.gmail.com  (o el que uses)
+#   SMTP_PORT                 465
+#   SMTP_USER                 tu@dominio.com
+#   SMTP_PASSWORD             app password
+#   SMTP_FROM_EMAIL           tu@dominio.com
+#   SMTP_FROM_NAME            HMS Nutrición Animal
+#   SMTP_USE_SSL              true
+#   SMTP_USE_TLS              false
+#   SMTP_ADMIN_EMAIL          hms002@gmail.com
+#   SMTP_BCC_CLIENTES         true
+#
+# IMAP (para procesador de bajas)
+#   IMAP_HOST                 imap.gmail.com
+#   IMAP_USER                 tu@dominio.com
+#   IMAP_PASSWORD             app password
+#
+# WhatsApp (Twilio)
+#   TWILIO_ACCOUNT_SID        AC...
+#   TWILIO_AUTH_TOKEN         ...
+#   TWILIO_FROM_NUMBER        +14155238886  (sandbox) o el tuyo
+#   TWILIO_ADMIN_PHONE        +5492954517407
+#   TWILIO_MODO_SANDBOX       true  (o false en prod)
+#   CARGA_BASE_URL            https://.../carga (mini-app)
+#
+# Clima
+#   WEATHERAPI_KEY            ...

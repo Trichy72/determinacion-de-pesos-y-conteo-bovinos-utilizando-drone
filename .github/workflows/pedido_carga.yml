@@ -1,0 +1,52 @@
+name: Pedido de carga silocomedero (cada 15 min)
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: pedido-carga
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Correr script
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
+          SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+          SMTP_USE_SSL: ${{ secrets.SMTP_USE_SSL }}
+          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
+          SMTP_ADMIN_EMAIL: ${{ secrets.SMTP_ADMIN_EMAIL }}
+          SMTP_BCC_CLIENTES: ${{ secrets.SMTP_BCC_CLIENTES }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_USER: ${{ secrets.IMAP_USER }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
+          TWILIO_ADMIN_PHONE: ${{ secrets.TWILIO_ADMIN_PHONE }}
+          TWILIO_MODO_SANDBOX: ${{ secrets.TWILIO_MODO_SANDBOX }}
+          CARGA_BASE_URL: ${{ secrets.CARGA_BASE_URL }}
+          WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
+          DRY_RUN: ${{ vars.DRY_RUN || 'false' }}
+        run: python scripts/whatsapp_pedido_carga.py

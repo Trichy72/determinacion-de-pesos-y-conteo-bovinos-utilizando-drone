@@ -3391,18 +3391,55 @@ with tab_inicio:
             calcular_stock_actual, listar_productos_hms_lote,
         )
         _hoy_log = datetime.now().date()
-        _filas_log = []
+
+        # ── Cache del cálculo pesado (60s TTL) ──
+        # El loop hace ~50 queries a Postgres remoto que suman 5-15s
+        # por render. Cacheamos en session_state y refrescamos cada
+        # minuto (o al hacer click en Actualizar).
+        import time as _t_c
+        _cache_valida = (
+            "_dash_stock" in st.session_state
+            and _t_c.time() - st.session_state.get(
+                "_dash_stock_ts", 0
+            ) < 60
+        )
+        _c_dash = st.session_state.get("_dash_stock", {}) or {}
+
+        _filas_log = (
+            list(_c_dash.get("filas_log", []))
+            if _cache_valida else []
+        )
         # Para los KPIs/visuales sumamos TODO el stock vigente y la
         # próxima fecha de agotamiento, no solo lo que está en alerta.
-        _stock_total_kg = 0
-        _proxima_entrega_fecha = None
-        _proxima_entrega_cliente = ""
-        _autonomia_por_cliente_lote = []  # para las barras visuales
+        _stock_total_kg = (
+            _c_dash.get("stock_total_kg", 0) if _cache_valida else 0
+        )
+        _proxima_entrega_fecha = (
+            _c_dash.get("proxima_entrega_fecha")
+            if _cache_valida else None
+        )
+        _proxima_entrega_cliente = (
+            _c_dash.get("proxima_entrega_cliente", "")
+            if _cache_valida else ""
+        )
+        _autonomia_por_cliente_lote = (
+            list(_c_dash.get("autonomia", []))
+            if _cache_valida else []
+        )  # para las barras visuales
         # Entregas registradas a lotes que NO tienen dieta cargada —
         # no podemos calcular stock pero hay que mostrar igual que la
         # carga se hizo, para que el asesor entienda qué falta.
-        _entregas_sin_dieta = []
-        for _cli_log in db.listar_clientes():
+        _entregas_sin_dieta = (
+            list(_c_dash.get("entregas_sin_dieta", []))
+            if _cache_valida else []
+        )
+
+        # Si el cache está fresco, saltamos el loop entero. Cuando no,
+        # iteramos y al final guardamos el resultado en session_state.
+        _clientes_a_iterar = (
+            [] if _cache_valida else db.listar_clientes()
+        )
+        for _cli_log in _clientes_a_iterar:
             if _cli_log.get("estado", "activo") != "activo":
                 continue
             _lotes_log = db.listar_lotes(
@@ -3733,6 +3770,19 @@ with tab_inicio:
                             _cli_log.get("whatsapp")
                             or _cli_log.get("contacto") or "—",
                     })
+
+        # Guardar el resultado en session_state si acabamos de
+        # calcularlo (no venía del cache).
+        if not _cache_valida:
+            st.session_state["_dash_stock"] = {
+                "filas_log": _filas_log,
+                "stock_total_kg": _stock_total_kg,
+                "proxima_entrega_fecha": _proxima_entrega_fecha,
+                "proxima_entrega_cliente": _proxima_entrega_cliente,
+                "autonomia": _autonomia_por_cliente_lote,
+                "entregas_sin_dieta": _entregas_sin_dieta,
+            }
+            st.session_state["_dash_stock_ts"] = _t_c.time()
 
         # ═══════════════ BLOQUE VISUAL ═══════════════
         # KPIs del mes + barras de autonomía + cronograma.

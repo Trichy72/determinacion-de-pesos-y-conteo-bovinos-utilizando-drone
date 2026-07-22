@@ -22,6 +22,7 @@ La config nunca se commitea — vive en data/smtp_config.json (en .gitignore).
 from __future__ import annotations
 
 import json
+import os
 import smtplib
 import ssl
 from datetime import datetime
@@ -48,15 +49,54 @@ COLOR_ALERTA_INFO = "#2980B9"
 # CONFIG SMTP
 # =====================================================================
 
+def _cargar_smtp_desde_env() -> Optional[Dict]:
+    """Fallback para entornos sin filesystem persistente (GitHub Actions,
+    Streamlit Cloud). Si están las env vars SMTP_HOST + SMTP_USER +
+    SMTP_PASSWORD, arma un dict compatible con el JSON."""
+    host = os.getenv("SMTP_HOST")
+    user = os.getenv("SMTP_USER")
+    password = os.getenv("SMTP_PASSWORD")
+    if not (host and user and password):
+        return None
+
+    def _b(name, default=False):
+        v = os.getenv(name)
+        if v is None:
+            return default
+        return str(v).strip().lower() in ("1", "true", "yes", "si", "sí")
+
+    return {
+        "host": host,
+        "port": int(os.getenv("SMTP_PORT", "465")),
+        "user": user,
+        "password": password,
+        "from_email": os.getenv("SMTP_FROM_EMAIL", user),
+        "from_name": os.getenv("SMTP_FROM_NAME", "HMS Nutrición Animal"),
+        "use_ssl": _b("SMTP_USE_SSL", True),
+        "use_tls": _b("SMTP_USE_TLS", False),
+        "admin_email": os.getenv("SMTP_ADMIN_EMAIL", ""),
+        "bcc_clientes": _b("SMTP_BCC_CLIENTES", True),
+        "imap_host": os.getenv("IMAP_HOST", ""),
+        "imap_user": os.getenv("IMAP_USER", ""),
+        "imap_password": os.getenv("IMAP_PASSWORD", ""),
+    }
+
+
 def cargar_config_smtp() -> Optional[Dict]:
-    """Lee la config SMTP. Devuelve None si no existe."""
-    if not CONFIG_PATH.exists():
-        return None
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+    """Lee la config SMTP.
+
+    Prioridad:
+      1. Archivo JSON local (uso desarrollo / Mac).
+      2. Variables de entorno SMTP_* (GitHub Actions / Streamlit Cloud).
+      3. None si no hay ni una ni otra.
+    """
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return _cargar_smtp_desde_env()
 
 
 def guardar_config_smtp(cfg: Dict) -> None:
