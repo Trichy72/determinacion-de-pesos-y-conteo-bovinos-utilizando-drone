@@ -103,6 +103,52 @@ def _traducir_placeholders(sql: str) -> str:
 
 
 # =====================================================================
+# Traducción de funciones de fecha SQLite → Postgres
+# =====================================================================
+
+# SQLite tiene funciones como `date('now')`, `datetime('now', '-N hours')`
+# y `date(col)` que no existen en Postgres. Traducimos automáticamente
+# antes de mandar el SQL al servidor para que el código legacy funcione
+# sin cambios en las funciones DB.
+_DATE_NOW_RE = re.compile(r"\bdate\(\s*'now'\s*\)", re.IGNORECASE)
+_DATETIME_NOW_INTERVAL_RE = re.compile(
+    r"\bdatetime\(\s*'now'\s*,\s*'\s*([+-]?\d+)\s+(hour|hours|day|days|minute|minutes|month|months|year|years)\s*'\s*\)",
+    re.IGNORECASE,
+)
+_DATE_EXPR_RE = re.compile(
+    r"\bdate\(\s*([^()']+?)\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _traducir_funciones_fecha(sql: str) -> str:
+    """Reemplaza funciones SQLite de fecha por equivalentes Postgres.
+
+    - `date('now')` → `CURRENT_DATE`
+    - `datetime('now', '-N hours')` → `(NOW() - INTERVAL 'N hours')`
+    - `date(<expr>)` → `(<expr>)::date` (cast, no función)
+
+    Solo se aplica cuando estamos hablando con Postgres. En SQLite el
+    SQL original ya funciona nativo — no lo tocamos.
+    """
+    # Aplicar en este orden: los patrones más específicos primero, porque
+    # el genérico date(<expr>) matchearía date('now') también.
+    sql = _DATE_NOW_RE.sub("CURRENT_DATE", sql)
+
+    def _fmt_interval(m):
+        n = int(m.group(1))
+        unit = m.group(2).lower().rstrip("s")  # normalizar a singular
+        signo = "+" if n >= 0 else "-"
+        return f"(NOW() {signo} INTERVAL '{abs(n)} {unit}')"
+
+    sql = _DATETIME_NOW_INTERVAL_RE.sub(_fmt_interval, sql)
+    # Genérico: date(col), date(r.col), date(?) → cast a ::date.
+    # No matchea date('...') porque el regex excluye comillas simples.
+    sql = _DATE_EXPR_RE.sub(r"(\1)::date", sql)
+    return sql
+
+
+# =====================================================================
 # Adaptadores tipo sqlite3
 # =====================================================================
 
@@ -160,8 +206,9 @@ class CursorAdapter:
         return RowDict(cols, row)
 
     def execute(self, sql: str, params: Iterable[Any] = ()):
-        # Traducir placeholders sqlite → postgres
-        sql_pg = _traducir_placeholders(sql)
+        # Traducir placeholders sqlite → postgres, y funciones de fecha
+        sql_pg = _traducir_funciones_fecha(sql)
+        sql_pg = _traducir_placeholders(sql_pg)
 
         # Truco para .lastrowid: si es un INSERT y no tiene RETURNING,
         # agregamos "RETURNING id" para poder rescatar el id generado.
@@ -198,7 +245,8 @@ class CursorAdapter:
         return self
 
     def executemany(self, sql: str, seq_params: Iterable[Iterable[Any]]):
-        sql_pg = _traducir_placeholders(sql)
+        sql_pg = _traducir_funciones_fecha(sql)
+        sql_pg = _traducir_placeholders(sql_pg)
         self._cur.executemany(sql_pg, [tuple(p) for p in seq_params])
         return self
 

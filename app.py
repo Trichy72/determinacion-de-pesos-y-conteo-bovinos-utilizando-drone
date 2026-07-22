@@ -16009,14 +16009,26 @@ with tab_train:
 
         # Botón para descargar el notebook Colab
         st.markdown("---")
-        notebook_bytes = training.generar_notebook_colab()
-        st.download_button(
-            "📥 Descargar notebook Colab listo",
-            data=notebook_bytes,
-            file_name="finetune_bovinos.ipynb",
-            mime="application/json",
-            type="primary",
-        )
+        # Solo tiene sentido si las libs de drone (ultralytics/cv2) están
+        # disponibles: en Streamlit Cloud (free tier) las deshabilitamos
+        # por límite de RAM, así que ocultamos el botón (evita crash con
+        # data=None cuando training es _DroneStub).
+        if _DRONE_LIBS_OK:
+            notebook_bytes = training.generar_notebook_colab()
+            st.download_button(
+                "📥 Descargar notebook Colab listo",
+                data=notebook_bytes,
+                file_name="finetune_bovinos.ipynb",
+                mime="application/json",
+                type="primary",
+            )
+        else:
+            st.info(
+                "🚫 Descarga del notebook Colab no disponible en el "
+                "deploy cloud. Requiere `ultralytics + torch + opencv`, "
+                "que superan el límite de RAM del free tier. Usá esta "
+                "pestaña desde tu Mac local."
+            )
 
 
 # ----------------------------- AYUDA ----------------------------------
