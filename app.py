@@ -3392,17 +3392,39 @@ with tab_inicio:
         )
         _hoy_log = datetime.now().date()
 
-        # ── Cache del cálculo pesado (60s TTL) ──
-        # El loop hace ~50 queries a Postgres remoto que suman 5-15s
-        # por render. Cacheamos en session_state y refrescamos cada
-        # minuto (o al hacer click en Actualizar).
+        # ── Cache del cálculo pesado (5 min TTL) ──
+        # El loop hace ~50 queries a Postgres remoto que suman 15-60s
+        # por render (peor con más clientes). Cacheamos en session_state
+        # con TTL amplio + botón manual para refrescar.
         import time as _t_c
+        _TTL_CACHE_STOCK = 300  # 5 minutos
+        _btn_col1, _btn_col2 = st.columns([6, 1])
+        with _btn_col2:
+            if st.button(
+                "🔄 Actualizar",
+                key="_btn_refresh_stock",
+                help="Recalcular stock actual (por defecto se refresca cada 5 min)",
+                width="stretch",
+            ):
+                st.session_state.pop("_dash_stock", None)
+                st.session_state.pop("_dash_stock_ts", None)
+                st.rerun()
         _cache_valida = (
             "_dash_stock" in st.session_state
             and _t_c.time() - st.session_state.get(
                 "_dash_stock_ts", 0
-            ) < 60
+            ) < _TTL_CACHE_STOCK
         )
+        if not _cache_valida:
+            _spinner_msg = (
+                f"⏳ Calculando stock ({len(db.listar_clientes())} clientes)... "
+                "Puede tardar 15-60 seg la primera vez. "
+                "Después queda cacheado 5 min."
+            )
+            _spinner_ph = st.empty()
+            _spinner_ph.info(_spinner_msg)
+        else:
+            _spinner_ph = None
         _c_dash = st.session_state.get("_dash_stock", {}) or {}
 
         _filas_log = (
@@ -3783,6 +3805,8 @@ with tab_inicio:
                 "entregas_sin_dieta": _entregas_sin_dieta,
             }
             st.session_state["_dash_stock_ts"] = _t_c.time()
+            if _spinner_ph is not None:
+                _spinner_ph.empty()
 
         # ═══════════════ BLOQUE VISUAL ═══════════════
         # KPIs del mes + barras de autonomía + cronograma.
