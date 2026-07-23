@@ -4419,9 +4419,13 @@ with tab_inicio:
             )
 
     except Exception as _e_log:
-        st.warning(
-            f"No pude calcular la logística: {_e_log}"
+        import traceback as _tb_log
+        st.error(
+            f"⚠️ Error en bloque logística: "
+            f"{type(_e_log).__name__}: {_e_log}"
         )
+        with st.expander("Ver traceback completo"):
+            st.code(_tb_log.format_exc(), language="python")
 
     st.divider()
 
