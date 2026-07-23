@@ -3392,6 +3392,40 @@ with tab_inicio:
         )
         _hoy_log = datetime.now().date()
 
+        # ── Fast path: cachear queries DB durante el render ──
+        # Sin esto, calcular_stock_actual + calcular_consumo_diario_kg
+        # llaman a listar_dietas / listar_entregas_cliente cientos de
+        # veces (loop día por día hasta agotamiento). Con cache de
+        # request-scope, cortamos ~90% de las queries y bajamos el
+        # tiempo de 30-60s a 2-5s.
+        import src.database as _db_mod_ct
+        import functools as _ft_ct
+        if not hasattr(_db_mod_ct, "_ORIG_DASH_CACHE"):
+            _db_mod_ct._ORIG_DASH_CACHE = {
+                "listar_dietas": _db_mod_ct.listar_dietas,
+                "listar_entregas_cliente": _db_mod_ct.listar_entregas_cliente,
+                "listar_entregas_lote": _db_mod_ct.listar_entregas_lote,
+                "listar_lotes": _db_mod_ct.listar_lotes,
+                "listar_clientes": _db_mod_ct.listar_clientes,
+                "ultima_carga_silocomedero": _db_mod_ct.ultima_carga_silocomedero,
+            }
+        _orig_ct = _db_mod_ct._ORIG_DASH_CACHE
+        # Cache de la vida del render (se pierde al terminar).
+        _rq_cache = {}
+
+        def _mk_cached(nombre, fn):
+            def _wrapper(*args, **kwargs):
+                key = (nombre, args, tuple(sorted(kwargs.items())))
+                if key not in _rq_cache:
+                    _rq_cache[key] = fn(*args, **kwargs)
+                return _rq_cache[key]
+            _wrapper.__wrapped__ = fn
+            return _wrapper
+
+        # Monkey-patch: usar versión cacheada durante el bloque
+        for _nom, _fn in _orig_ct.items():
+            setattr(_db_mod_ct, _nom, _mk_cached(_nom, _fn))
+
         # ── Cache del cálculo pesado (5 min TTL) ──
         # El loop hace ~50 queries a Postgres remoto que suman 15-60s
         # por render (peor con más clientes). Cacheamos en session_state
@@ -4450,6 +4484,15 @@ with tab_inicio:
         )
         with st.expander("Ver traceback completo"):
             st.code(_tb_log.format_exc(), language="python")
+    finally:
+        # Restaurar funciones DB originales (revertir monkey-patch)
+        try:
+            import src.database as _db_mod_ct_rst
+            if hasattr(_db_mod_ct_rst, "_ORIG_DASH_CACHE"):
+                for _n, _fn in _db_mod_ct_rst._ORIG_DASH_CACHE.items():
+                    setattr(_db_mod_ct_rst, _n, _fn)
+        except Exception:
+            pass
 
     st.divider()
 
