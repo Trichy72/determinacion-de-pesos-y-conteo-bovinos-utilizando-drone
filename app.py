@@ -3462,13 +3462,56 @@ with tab_inicio:
                         _db_inv._TTL_CACHE.clear()
                 except Exception:
                     pass
+                # Forzar recomputo saltando el blob precomputado por
+                # el cron. Sin este flag, la próxima ejecución del
+                # render vería el blob del cron (fresco por 15 min)
+                # y no recalcularía — el asesor pensaría que el
+                # botón no hizo nada.
+                st.session_state["_force_recompute_stock"] = True
                 st.rerun()
+
+        # Fast path #1: leer el blob precomputado por el cron
+        # (GH Actions cada 5 min). Si está fresco (≤15 min), lo
+        # cargamos a session_state y el resto del código lo ve
+        # como si el cache local estuviera válido — sin cambios en
+        # la lógica de abajo.
+        _force_recompute = st.session_state.pop(
+            "_force_recompute_stock", False,
+        )
+        _edad_cache_db = None
+        if "_dash_stock" not in st.session_state and not _force_recompute:
+            try:
+                _cache_db = db.leer_dashboard_cache(
+                    "logistica_v1", max_edad_seg=900,
+                )
+            except Exception:
+                _cache_db = None
+            if _cache_db:
+                _edad_cache_db = float(
+                    _cache_db.pop("_edad_seg", 0) or 0
+                )
+                st.session_state["_dash_stock"] = _cache_db
+                # Retrasar el ts local con la edad del blob para
+                # que el TTL de 5min del session_state coincida
+                # con la edad real de la data.
+                st.session_state["_dash_stock_ts"] = (
+                    _t_c.time() - _edad_cache_db
+                )
+
         _cache_valida = (
             "_dash_stock" in st.session_state
             and _t_c.time() - st.session_state.get(
                 "_dash_stock_ts", 0
             ) < _TTL_CACHE_STOCK
         )
+        if _edad_cache_db is not None and _cache_valida:
+            _mins = max(0, int(_edad_cache_db / 60))
+            st.caption(
+                f"🛰️ Datos precomputados hace {_mins} min "
+                f"(cron cada 5 min). "
+                f"Botón 🔄 para forzar recálculo con los datos "
+                f"más nuevos."
+            )
         if not _cache_valida:
             _spinner_msg = (
                 f"⏳ Calculando stock ({len(db.listar_clientes())} clientes)... "
@@ -3510,347 +3553,31 @@ with tab_inicio:
             if _cache_valida else []
         )
 
-        # Si el cache está fresco, saltamos el loop entero. Cuando no,
-        # iteramos y al final guardamos el resultado en session_state.
-        _clientes_a_iterar = (
-            [] if _cache_valida else db.listar_clientes()
-        )
-        for _cli_log in _clientes_a_iterar:
-            if _cli_log.get("estado", "activo") != "activo":
-                continue
-            _lotes_log = db.listar_lotes(
-                cliente_id=_cli_log["id"], estado="activo",
+        # Si el cache está fresco, saltamos el cálculo pesado.
+        # Cuando no, delegamos al módulo dashboard_precompute que
+        # es el MISMO código que corre el cron (scripts/
+        # precompute_dashboard.py) — una sola fuente de verdad.
+        if not _cache_valida:
+            from src.dashboard_precompute import (
+                calcular_dashboard_logistica,
             )
-            for _l_log in _lotes_log:
-                # Solo productos vendidos por HMS — no maíz/rollos/silaje
-                # que el productor compra por su lado.
-                _productos_log = listar_productos_hms_lote(
-                    _cli_log["id"], _l_log["id"]
-                )
-                if not _productos_log:
-                    # No hay match dieta ∩ entregas. Pero si hay
-                    # entregas registradas al lote, las mostramos
-                    # como "pendientes de dieta".
-                    try:
-                        _ent_lote = db.listar_entregas_lote(_l_log["id"])
-                    except Exception:
-                        _ent_lote = []
-                    if _ent_lote:
-                        # Agrupar por producto
-                        from collections import defaultdict as _dd
-                        _por_prod_lote = _dd(
-                            lambda: {"kg": 0, "fechas": []}
-                        )
-                        for _e in _ent_lote:
-                            _por_prod_lote[
-                                _e.get("producto_nombre", "?")
-                            ]["kg"] += _e.get("kg_total") or 0
-                            _por_prod_lote[
-                                _e.get("producto_nombre", "?")
-                            ]["fechas"].append(_e.get("fecha_entrega"))
-                        for _p, _info in _por_prod_lote.items():
-                            _entregas_sin_dieta.append({
-                                "cliente": _cli_log["nombre"],
-                                "lote": _l_log["identificador"],
-                                "lote_id": _l_log["id"],
-                                "producto": _p,
-                                "kg_total": _info["kg"],
-                                "ultima_fecha": (
-                                    max(_info["fechas"])
-                                    if _info["fechas"] else "—"
-                                ),
-                                "n_entregas": len(_info["fechas"]),
-                            })
-                    continue
-                for _prod_log in _productos_log:
-                    try:
-                        _stock_log = calcular_stock_actual(
-                            _cli_log["id"], _l_log["id"], _prod_log,
-                        )
-                    except Exception:
-                        continue
-                    if not _stock_log:
-                        continue
-                    _dias = _stock_log.get("dias_restantes", 0)
-                    _kg_rest = _stock_log.get("kg_restantes_hoy", 0)
-                    _kg_dia = _stock_log.get("consumo_diario_kg", 0)
-                    _kg_entreg = _stock_log.get(
-                        "kg_entregados_total", 0)
-                    # Necesitamos entregas registradas para tener algo
-                    # que mostrar.
-                    if _stock_log.get(
-                        "diagnostico_uso") == "sin_entregas":
-                        continue
-                    # Sumamos al stock total y registramos para las
-                    # barras de autonomía (todos los activos, no solo
-                    # los en alerta).
-                    _stock_total_kg += _kg_rest
-                    _fecha_agot = _stock_log.get("fecha_agotamiento")
-                    if _fecha_agot and _kg_rest > 0:
-                        if (_proxima_entrega_fecha is None
-                                or _fecha_agot < _proxima_entrega_fecha):
-                            _proxima_entrega_fecha = _fecha_agot
-                            _proxima_entrega_cliente = _cli_log["nombre"]
-                    # ¿Es silocomedero? Si sí, calculamos cuántas
-                    # cargas más del silo cubre el stock actual del
-                    # producto, en lugar de asumir consumo continuo
-                    # (que es lo que devuelve calcular_stock_actual).
-                    _es_silo_lt = (
-                        (_l_log.get("tipo_comedero_concentrado")
-                         or "").lower() == "silocomedero"
-                    )
-                    _cargas_rest = None
-                    _kg_prod_por_carga = None
-                    _fecha_prox_recarga = None
-                    if _es_silo_lt:
-                        try:
-                            from src.stock_producto import (
-                                proyectar_fin_carga_silocomedero,
-                                _dieta_vigente,
-                                _mismo_producto,
-                            )
-                            # % del producto HMS en la mezcla de la
-                            # dieta vigente. Lo usamos para estimar
-                            # cuánto producto se va por cada carga.
-                            _dietas_lt = db.listar_dietas(
-                                _l_log["id"]
-                            )
-                            _hoy_ref = datetime.now().strftime(
-                                "%Y-%m-%d"
-                            )
-                            _dieta_lt = (
-                                _dieta_vigente(_dietas_lt, _hoy_ref)
-                                if _dietas_lt else None
-                            )
-                            _pct_prod_mezcla = 0.0
-                            if _dieta_lt:
-                                _kg_tc_prod = 0.0
-                                _kg_tc_total = 0.0
-                                for _c_d in (
-                                    _dieta_lt.get("composicion")
-                                    or []
-                                ):
-                                    _nom_d = (
-                                        _c_d.get("nombre") or ""
-                                    ).strip()
-                                    _kg_tc = float(
-                                        _c_d.get("kg_tal_cual") or 0
-                                    )
-                                    # Excluir libre disposición de
-                                    # la mezcla (rollo a voluntad,
-                                    # etc.).
-                                    try:
-                                        from src.stock_producto import (
-                                            _es_a_discrecion,
-                                        )
-                                        if _es_a_discrecion(_nom_d):
-                                            continue
-                                    except Exception:
-                                        pass
-                                    _kg_tc_total += _kg_tc
-                                    if _mismo_producto(
-                                        _nom_d, _prod_log,
-                                    ):
-                                        _kg_tc_prod = _kg_tc
-                                if _kg_tc_total > 0:
-                                    _pct_prod_mezcla = (
-                                        _kg_tc_prod / _kg_tc_total
-                                    )
-                            # kg cargados en la última vez al silo
-                            _ultima_silo = (
-                                db.ultima_carga_silocomedero(
-                                    _l_log["id"]
-                                )
-                            )
-                            _kg_carga_silo = (
-                                float(_ultima_silo["kg_cargados"])
-                                if _ultima_silo
-                                and _ultima_silo.get("kg_cargados")
-                                else 0.0
-                            )
-                            # Si la última carga tiene desglose por
-                            # ingrediente, usar el kg REAL del producto
-                            # (más preciso que estimar con %).
-                            _kg_prod_carga_real = 0.0
-                            if _ultima_silo:
-                                import json as _json_d
-                                try:
-                                    _desg = _json_d.loads(
-                                        _ultima_silo.get(
-                                            "desglose_ingredientes_json"
-                                        ) or "[]"
-                                    )
-                                    for _d_ in _desg:
-                                        if _mismo_producto(
-                                            _d_.get("nombre", ""),
-                                            _prod_log,
-                                        ):
-                                            _kg_prod_carga_real = (
-                                                float(_d_.get("kg")
-                                                       or 0)
-                                            )
-                                            break
-                                except Exception:
-                                    pass
-                            if _kg_prod_carga_real > 0:
-                                _kg_prod_por_carga = round(
-                                    _kg_prod_carga_real, 1,
-                                )
-                            elif (_pct_prod_mezcla > 0
-                                    and _kg_carga_silo > 0):
-                                _kg_prod_por_carga = round(
-                                    _kg_carga_silo * _pct_prod_mezcla,
-                                    1,
-                                )
-                            if (_kg_prod_por_carga
-                                    and _kg_prod_por_carga > 0):
-                                _cargas_rest = round(
-                                    _kg_rest
-                                    / _kg_prod_por_carga,
-                                    1,
-                                )
-                            # Fecha en la que se agota la carga
-                            # actual del silo (próxima recarga).
-                            try:
-                                _proy_silo = (
-                                    proyectar_fin_carga_silocomedero(
-                                        _l_log["id"]
-                                    )
-                                )
-                                if _proy_silo:
-                                    _fecha_prox_recarga = (
-                                        _proy_silo.get(
-                                            "fecha_agotamiento"
-                                        )
-                                    )
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
-                    # Para silocomedero: sobreescribir días/fecha con
-                    # la lógica de cargas (coherente con el bloque del
-                    # silo de abajo). Sin esto la barra muestra
-                    # consumo continuo, que NO se cumple en silo.
-                    _dias_final = _dias
-                    _fecha_agot_final = _fecha_agot
-                    if (_es_silo_lt and _cargas_rest is not None
-                            and _fecha_prox_recarga):
-                        try:
-                            from datetime import datetime as _dt_x
-                            _f_prox = _dt_x.strptime(
-                                _fecha_prox_recarga, "%Y-%m-%d"
-                            ).date()
-                            _hoy_dt = _dt_x.now().date()
-                            _dias_hasta_prox = max(
-                                0, (_f_prox - _hoy_dt).days,
-                            )
-                            # Última fecha en la que TODAVÍA hay
-                            # producto para cargar el silo. Si
-                            # cargas_restantes < 1, ya no llega a la
-                            # próxima recarga → la fecha crítica es
-                            # el agotamiento del silo actual.
-                            # Si >= 1, cada carga adicional dura
-                            # aprox los mismos días que la actual.
-                            _ult_silo_local = _ultima_silo
-                            _dias_por_carga = 0
-                            try:
-                                _dc = float(
-                                    (_ult_silo_local or {}).get(
-                                        "dias_cubiertos"
-                                    ) or 0
-                                )
-                                _dias_por_carga = (
-                                    _dc if _dc > 0 else 0
-                                )
-                            except Exception:
-                                pass
-                            # Caso especial: la carga actual del silo
-                                # ya está agotada (dias_hasta_prox==0)
-                                # pero todavía queda producto en stock.
-                                # Eso es porque el productor todavía no
-                                # cargó el silo de nuevo, pero tiene
-                                # bolsas en el galpón. En ese caso el
-                                # override daría 0, lo cual es confuso
-                                # — caemos al cálculo continuo (que es
-                                # lo que mejor refleja "para cuántos
-                                # días te alcanza el stock que tenés").
-                            if (_dias_hasta_prox == 0
-                                    and _kg_rest > 0):
-                                _dias_final = _dias
-                                _fecha_agot_final = _fecha_agot
-                            elif _cargas_rest < 1:
-                                _dias_final = _dias_hasta_prox
-                                _fecha_agot_final = (
-                                    _fecha_prox_recarga
-                                )
-                            else:
-                                _cargas_full = max(
-                                    0, _cargas_rest - 1
-                                )
-                                _dias_extra = int(round(
-                                    _cargas_full * _dias_por_carga
-                                ))
-                                from datetime import timedelta as _td_x
-                                _dias_final = (
-                                    _dias_hasta_prox + _dias_extra
-                                )
-                                _fecha_agot_final = (
-                                    _f_prox + _td_x(days=_dias_extra)
-                                ).isoformat()
-                        except Exception:
-                            pass
-                    _autonomia_por_cliente_lote.append({
-                        "cliente": _cli_log["nombre"],
-                        "lote": _l_log["identificador"],
-                        "lote_id": _l_log["id"],
-                        "producto": _prod_log,
-                        "kg_rest": _kg_rest,
-                        "kg_entreg": _kg_entreg,
-                        "dias": _dias_final,
-                        "fecha_agot": _fecha_agot_final,
-                        "es_silocomedero": _es_silo_lt,
-                        "cargas_restantes": _cargas_rest,
-                        "kg_prod_por_carga": _kg_prod_por_carga,
-                        "fecha_prox_recarga": _fecha_prox_recarga,
-                    })
-                    # El filtro de alertas (≤14 días) lo seguimos
-                    # aplicando solo para la tabla detallada
-                    if _dias > 14:
-                        continue
-                    # Urgencia visual
-                    if _kg_rest <= 0:
-                        _urg_ico = "🔴"
-                        _urg_lbl = "AGOTADO"
-                    elif _dias <= 3:
-                        _urg_ico = "🔴"
-                        _urg_lbl = "URGENTE"
-                    elif _dias <= 7:
-                        _urg_ico = "🟠"
-                        _urg_lbl = "Esta semana"
-                    else:
-                        _urg_ico = "🟡"
-                        _urg_lbl = "Próxima semana"
-                    _filas_log.append({
-                        "_dias_sort": _dias,
-                        "Urgencia": f"{_urg_ico} {_urg_lbl}",
-                        "Cliente": _cli_log["nombre"],
-                        "Lote": _l_log["identificador"],
-                        "Producto": _prod_log,
-                        "Stock (kg)": f"{_kg_rest:.0f}",
-                        "Consumo (kg/día)": f"{_kg_dia:.1f}",
-                        "Días rest.": f"{_dias:.0f}",
-                        "Se acaba":
-                            _stock_log.get(
-                                "fecha_agotamiento") or "—",
-                        "Contacto":
-                            _cli_log.get("whatsapp")
-                            or _cli_log.get("contacto") or "—",
-                    })
+            _dash_data = calcular_dashboard_logistica()
+            _filas_log = _dash_data["filas_log"]
+            _stock_total_kg = _dash_data["stock_total_kg"]
+            _proxima_entrega_fecha = _dash_data[
+                "proxima_entrega_fecha"
+            ]
+            _proxima_entrega_cliente = _dash_data[
+                "proxima_entrega_cliente"
+            ]
+            _autonomia_por_cliente_lote = _dash_data["autonomia"]
+            _entregas_sin_dieta = _dash_data["entregas_sin_dieta"]
+
 
         # Guardar el resultado en session_state si acabamos de
         # calcularlo (no venía del cache).
         if not _cache_valida:
-            st.session_state["_dash_stock"] = {
+            _dash_stock_nuevo = {
                 "filas_log": _filas_log,
                 "stock_total_kg": _stock_total_kg,
                 "proxima_entrega_fecha": _proxima_entrega_fecha,
@@ -3858,7 +3585,19 @@ with tab_inicio:
                 "autonomia": _autonomia_por_cliente_lote,
                 "entregas_sin_dieta": _entregas_sin_dieta,
             }
+            st.session_state["_dash_stock"] = _dash_stock_nuevo
             st.session_state["_dash_stock_ts"] = _t_c.time()
+            # Y también empujar a la tabla dashboard_cache para que
+            # OTRAS sesiones (otro asesor, o el mismo asesor tras
+            # dormir la app de Streamlit) reciban el mismo blob sin
+            # tener que recalcular. El cron lo va a sobreescribir
+            # dentro de 5 min con la próxima corrida.
+            try:
+                db.guardar_dashboard_cache(
+                    "logistica_v1", _dash_stock_nuevo,
+                )
+            except Exception:
+                pass
             if _spinner_ph is not None:
                 _spinner_ph.empty()
 

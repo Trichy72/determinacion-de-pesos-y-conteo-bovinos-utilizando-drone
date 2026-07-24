@@ -176,6 +176,16 @@ CREATE INDEX IF NOT EXISTS idx_entregas_cliente
     ON entregas_producto(cliente_id, fecha_entrega);
 CREATE INDEX IF NOT EXISTS idx_entregas_lote
     ON entregas_producto(lote_id, fecha_entrega);
+
+-- Blob-cache de vistas precomputadas del dashboard. Un cron externo
+-- (GitHub Actions cada 5 min) rellena esta tabla con el resultado
+-- serializado del bloque de logística — la app solo lo lee (1 query)
+-- en lugar de recalcular ~50 queries × 20 clientes cada visita.
+CREATE TABLE IF NOT EXISTS dashboard_cache (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -3084,3 +3094,153 @@ def generar_sugerencias_recordatorios() -> int:
                 pass
 
     return creados
+
+
+# =====================================================================
+# DASHBOARD CACHE (blob JSON precomputado por cron externo)
+# =====================================================================
+#
+# Contexto: el bloque de logística del dashboard corre un loop pesado
+# (cliente × lote × día hasta agotamiento) que con Supabase remoto
+# (200ms/query) tarda 30-60s. Para evitarle esa espera al asesor cada
+# vez que abre la app en el campo, un cron externo (GitHub Actions
+# cada 5 min) precalcula el resultado y lo guarda acá como JSON.
+# La app solo hace 1 query de lectura (~200ms) y renderiza.
+#
+# Uso:
+#   db.guardar_dashboard_cache('logistica_v1', {"filas_log": [...], ...})
+#   data = db.leer_dashboard_cache('logistica_v1', max_edad_seg=900)
+#   if data:  usar; else: recalcular on-demand.
+
+# Bandera para no re-emitir el CREATE TABLE en cada llamada (evita
+# roundtrip extra a Postgres). Se resetea al reiniciar el proceso.
+_DASHBOARD_CACHE_INIT: dict = {"done": False}
+
+
+def _ensure_dashboard_cache_table() -> None:
+    """Crea la tabla `dashboard_cache` si no existe. Idempotente y
+    válido para SQLite y Postgres.
+
+    En Postgres la data va en JSONB (indexable, futuro-proof); en
+    SQLite va en TEXT. En ambos casos guardamos/leemos como JSON
+    string por simplicidad — el que quiera consultar por dentro del
+    JSON puede usar `data::jsonb->>'campo'` en Postgres.
+    """
+    if _DASHBOARD_CACHE_INIT["done"]:
+        return
+    try:
+        if _usando_postgres():
+            with get_conn() as conn:
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS dashboard_cache (
+                           id TEXT PRIMARY KEY,
+                           data JSONB NOT NULL,
+                           updated_at TIMESTAMPTZ NOT NULL
+                               DEFAULT NOW()
+                       )"""
+                )
+        else:
+            with get_conn() as conn:
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS dashboard_cache (
+                           id TEXT PRIMARY KEY,
+                           data TEXT NOT NULL,
+                           updated_at TEXT NOT NULL
+                               DEFAULT CURRENT_TIMESTAMP
+                       )"""
+                )
+        _DASHBOARD_CACHE_INIT["done"] = True
+    except Exception:
+        # No romper la app si por alguna razón no se puede crear
+        # (permisos, connection error, etc). El cliente detectará
+        # que leer_dashboard_cache devuelve None y caerá al camino
+        # on-demand.
+        pass
+
+
+def guardar_dashboard_cache(id: str, data: Dict) -> None:
+    """Guarda (upsert) el blob JSON `data` bajo la clave `id`.
+
+    Marca `updated_at = now()` (server-side) — así la frescura no
+    depende del reloj del cliente que llama.
+    """
+    _ensure_dashboard_cache_table()
+    payload = json.dumps(data, ensure_ascii=False, default=str)
+    with get_conn() as conn:
+        if _usando_postgres():
+            # ON CONFLICT necesita id como PK — ya lo es.
+            # Cast explícito a jsonb — sin él Postgres implica-casta
+            # pero el error es feo cuando el JSON tiene comillas
+            # raras. Con el cast, cualquier JSON válido pasa.
+            conn.execute(
+                """INSERT INTO dashboard_cache (id, data, updated_at)
+                   VALUES (?, ?::jsonb, NOW())
+                   ON CONFLICT (id) DO UPDATE
+                     SET data = EXCLUDED.data,
+                         updated_at = NOW()""",
+                (id, payload),
+            )
+        else:
+            # SQLite: UPSERT con ON CONFLICT (v3.24+). Usar
+            # datetime('now') server-side (UTC) para que coincida con
+            # julianday('now') al leer — datetime.now() en Python es
+            # local y desfasa 3h en AR.
+            conn.execute(
+                """INSERT INTO dashboard_cache (id, data, updated_at)
+                   VALUES (?, ?, datetime('now'))
+                   ON CONFLICT(id) DO UPDATE
+                     SET data = excluded.data,
+                         updated_at = datetime('now')""",
+                (id, payload),
+            )
+
+
+def leer_dashboard_cache(
+    id: str, max_edad_seg: int = 900,
+) -> Optional[Dict]:
+    """Devuelve el blob JSON guardado bajo `id` si tiene menos de
+    `max_edad_seg` segundos. None si no existe o está viejo.
+
+    El dict devuelto tiene una clave extra `_edad_seg` con la edad
+    del snapshot en segundos, para que la UI pueda mostrar
+    "datos de hace X min".
+    """
+    _ensure_dashboard_cache_table()
+    try:
+        with get_conn() as conn:
+            if _usando_postgres():
+                r = conn.execute(
+                    """SELECT data::text AS data,
+                              EXTRACT(EPOCH FROM (NOW() - updated_at))
+                                  AS edad_seg
+                       FROM dashboard_cache
+                       WHERE id = ?""",
+                    (id,),
+                ).fetchone()
+            else:
+                r = conn.execute(
+                    """SELECT data,
+                              (julianday('now')
+                                  - julianday(updated_at)) * 86400
+                                  AS edad_seg
+                       FROM dashboard_cache
+                       WHERE id = ?""",
+                    (id,),
+                ).fetchone()
+    except Exception:
+        return None
+    if not r:
+        return None
+    try:
+        edad = float(r["edad_seg"] or 0)
+    except Exception:
+        edad = 0.0
+    if edad > max_edad_seg:
+        return None
+    try:
+        data = json.loads(r["data"])
+    except Exception:
+        return None
+    if isinstance(data, dict):
+        data["_edad_seg"] = edad
+    return data

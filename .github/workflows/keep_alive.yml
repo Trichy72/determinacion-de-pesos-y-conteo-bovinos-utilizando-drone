@@ -1,4 +1,4 @@
-name: Keep Streamlit warm (anti-sleep)
+name: Keep Streamlit warm + precompute dashboard
 
 on:
   schedule:
@@ -12,11 +12,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ping:
+  precompute-and-ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 8
     steps:
-      - name: Ping app
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Precomputar bloque de logística del dashboard
+        # Corre el cálculo pesado (loop cliente × lote × día) y guarda
+        # el resultado como blob JSON en la tabla dashboard_cache.
+        # La app lo lee con 1 query (~200ms) en lugar de recalcularlo
+        # con 30-60s de queries a Supabase cada vez que Mauri abre la
+        # app en el campo.
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Sin las claves de SMTP/Twilio/etc este script no manda
+          # nada — solo hace queries + INSERT. Se pasan igual por si
+          # alguna dependencia importada las lee al init.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
+        run: python scripts/precompute_dashboard.py
+
+      - name: Ping app (mantener Streamlit despierta)
         run: |
           set -e
           URL="https://determinacion-de-pesos-y-conteo-bovinos-utilizando-drone-9s6v3.streamlit.app/"
