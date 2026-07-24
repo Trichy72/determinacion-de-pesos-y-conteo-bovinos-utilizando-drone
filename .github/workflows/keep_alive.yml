@@ -1,0 +1,33 @@
+name: Keep Streamlit warm (anti-sleep)
+
+on:
+  schedule:
+    # Cada 5 min en horario laboral AR (7:00-22:00 = 10:00-01:00 UTC)
+    - cron: '*/5 10-23 * * *'
+    - cron: '*/5 0-1 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping app
+        run: |
+          set -e
+          URL="https://determinacion-de-pesos-y-conteo-bovinos-utilizando-drone-9s6v3.streamlit.app/"
+          CODE=$(curl -sS -o /dev/null -w "%{http_code}" -L --max-time 60 "$URL")
+          echo "HTTP $CODE - $(date -u)"
+          # Streamlit devuelve 200 si está viva, 303 si redirige a wake-up
+          if [ "$CODE" = "200" ] || [ "$CODE" = "303" ]; then
+            exit 0
+          fi
+          # Retry una vez si falla — puede que estuviera dormida
+          sleep 10
+          CODE2=$(curl -sS -o /dev/null -w "%{http_code}" -L --max-time 90 "$URL")
+          echo "Retry HTTP $CODE2"
+          [ "$CODE2" = "200" ] || [ "$CODE2" = "303" ]
