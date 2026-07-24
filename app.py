@@ -3410,15 +3410,28 @@ with tab_inicio:
                 "ultima_carga_silocomedero": _db_mod_ct.ultima_carga_silocomedero,
             }
         _orig_ct = _db_mod_ct._ORIG_DASH_CACHE
-        # Cache de la vida del render (se pierde al terminar).
-        _rq_cache = {}
+        # Cache TTL GLOBAL a nivel de proceso (compartido entre TODAS
+        # las sesiones y runs). 1ra carga hidrata, las siguientes N
+        # segundos vuelan sin ir a la DB. Perfecto para reunión con
+        # cliente donde se navega mucho entre pestañas.
+        if not hasattr(_db_mod_ct, "_TTL_CACHE"):
+            _db_mod_ct._TTL_CACHE = {}
+        _ttl_cache = _db_mod_ct._TTL_CACHE
+        _TTL_SEC = 90  # cache global 90s
+
+        import time as _time_ttl_ct
 
         def _mk_cached(nombre, fn):
             def _wrapper(*args, **kwargs):
                 key = (nombre, args, tuple(sorted(kwargs.items())))
-                if key not in _rq_cache:
-                    _rq_cache[key] = fn(*args, **kwargs)
-                return _rq_cache[key]
+                now = _time_ttl_ct.time()
+                if key in _ttl_cache:
+                    ts, val = _ttl_cache[key]
+                    if now - ts < _TTL_SEC:
+                        return val
+                val = fn(*args, **kwargs)
+                _ttl_cache[key] = (now, val)
+                return val
             _wrapper.__wrapped__ = fn
             return _wrapper
 
@@ -3442,6 +3455,13 @@ with tab_inicio:
             ):
                 st.session_state.pop("_dash_stock", None)
                 st.session_state.pop("_dash_stock_ts", None)
+                # Invalidar también el TTL cache global de queries DB
+                try:
+                    import src.database as _db_inv
+                    if hasattr(_db_inv, "_TTL_CACHE"):
+                        _db_inv._TTL_CACHE.clear()
+                except Exception:
+                    pass
                 st.rerun()
         _cache_valida = (
             "_dash_stock" in st.session_state
