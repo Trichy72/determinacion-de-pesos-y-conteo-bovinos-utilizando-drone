@@ -14884,8 +14884,16 @@ with tab_config:
             ("smtp_use_tls", bool(cfg_smtp_actual.get("use_tls", True))),
             ("smtp_admin_email", cfg_smtp_actual.get(
                 "admin_email", "mauricio@hmsnutricionanimal.com.ar")),
-            ("smtp_bcc_clientes", cfg_smtp_actual.get(
-                "bcc_clientes", "")),
+            # Ojo: en el JSON local `bcc_clientes` guarda el/los email(s)
+            # (string). En env vars (Streamlit Cloud/GitHub) `SMTP_BCC_CLIENTES`
+            # se lee como bool (activo/no activo). Defendemos ambos tipos:
+            # si es string usamos el email; si es bool ese es el toggle y
+            # el email queda vacío (cae al admin_email por default).
+            ("smtp_bcc_clientes", (
+                cfg_smtp_actual.get("bcc_clientes", "")
+                if isinstance(cfg_smtp_actual.get("bcc_clientes"), str)
+                else ""
+            )),
             ("smtp_bcc_activo", bool(cfg_smtp_actual.get(
                 "bcc_clientes"))),
             ("smtp_imap_host", cfg_smtp_actual.get("imap_host", "")),
