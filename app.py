@@ -3479,13 +3479,21 @@ with tab_inicio:
             "_force_recompute_stock", False,
         )
         _edad_cache_db = None
+        _debug_cache = None  # para diagnosticar por qué NO se lee el blob
         if "_dash_stock" not in st.session_state and not _force_recompute:
             try:
                 _cache_db = db.leer_dashboard_cache(
                     "logistica_v1", max_edad_seg=900,
                 )
-            except Exception:
+                if _cache_db is None:
+                    _debug_cache = "cache_db=None (no existe o >15min)"
+                else:
+                    _debug_cache = f"cache_db OK, edad={_cache_db.get('_edad_seg',0):.0f}s"
+            except Exception as _e_cache:
                 _cache_db = None
+                _debug_cache = f"ERROR: {type(_e_cache).__name__}: {_e_cache}"
+            if _debug_cache:
+                st.caption(f"🐛 debug precompute: {_debug_cache}")
             if _cache_db:
                 _edad_cache_db = float(
                     _cache_db.pop("_edad_seg", 0) or 0
