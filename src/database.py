@@ -27,6 +27,59 @@ DB_PATH = Path("data/cattle_tracker.db")
 
 
 # =====================================================================
+# ── Cache TTL de lecturas (process-wide) ──
+# Las queries a Supabase (Oregon) cuestan ~200ms cada una. La ficha
+# de cliente hace decenas → varios segundos. Cacheamos lecturas por
+# TTL corto y invalidamos TODO el cache en cada escritura, así nunca
+# se ven datos viejos tras guardar algo.
+# =====================================================================
+import copy as _copy_cache
+import functools as _ft_cache
+import time as _time_cache
+
+_CACHE_LECTURAS: dict = {}
+_CACHE_TTL_SEG = 120
+
+
+def invalidar_cache_lecturas() -> None:
+    """Vacía el cache de lecturas. Llamar tras CUALQUIER escritura."""
+    _CACHE_LECTURAS.clear()
+
+
+def _cache_lectura(fn):
+    """Decorator: cachea el resultado por (args, kwargs) durante TTL.
+    Devuelve deepcopy para que el caller pueda mutar sin romper el cache."""
+    @_ft_cache.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        try:
+            key = (fn.__name__, args, tuple(sorted(kwargs.items())))
+            hash(key)
+        except TypeError:
+            return fn(*args, **kwargs)  # args no hasheables → sin cache
+        now = _time_cache.time()
+        hit = _CACHE_LECTURAS.get(key)
+        if hit is not None and now - hit[0] < _CACHE_TTL_SEG:
+            return _copy_cache.deepcopy(hit[1])
+        val = fn(*args, **kwargs)
+        _CACHE_LECTURAS[key] = (now, val)
+        return _copy_cache.deepcopy(val)
+    return _wrapper
+
+
+def _invalida_cache(fn):
+    """Decorator para funciones de ESCRITURA: invalida el cache de
+    lecturas al terminar (con éxito o con error — invalidar de más es
+    barato; invalidar de menos deja datos fantasma en la UI)."""
+    @_ft_cache.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            invalidar_cache_lecturas()
+    return _wrapper
+
+
+# =====================================================================
 # ESQUEMA
 # =====================================================================
 
@@ -759,6 +812,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
 # CATEGORÍAS DE ANIMALES (CRUD)
 # =====================================================================
 
+@_cache_lectura
 def listar_categorias(solo_activas: bool = True) -> list:
     """Devuelve la lista de categorías ordenadas por `orden`.
 
@@ -779,6 +833,7 @@ def nombres_categorias(solo_activas: bool = True) -> list:
     return [c["nombre"] for c in listar_categorias(solo_activas)]
 
 
+@_invalida_cache
 def crear_categoria(nombre: str, adpv_default_kg_dia: float = 0.0,
                     orden: int = 100, notas: str = "") -> int:
     """Crea una categoría nueva. Devuelve el id creado.
@@ -806,6 +861,7 @@ def crear_categoria(nombre: str, adpv_default_kg_dia: float = 0.0,
         return cur.lastrowid
 
 
+@_invalida_cache
 def actualizar_categoria(categoria_id: int, nombre: str = None,
                          adpv_default_kg_dia: float = None,
                          orden: int = None, activo: int = None,
@@ -838,6 +894,7 @@ def actualizar_categoria(categoria_id: int, nombre: str = None,
         )
 
 
+@_invalida_cache
 def eliminar_categoria(categoria_id: int) -> None:
     """Borrado físico. Si la categoría está en uso por algún lote,
     es preferible desactivarla con activo=0 — esta función no
@@ -853,6 +910,7 @@ def eliminar_categoria(categoria_id: int) -> None:
 # CLIENTES
 # =====================================================================
 
+@_invalida_cache
 def crear_cliente(nombre: str, contacto: str = "", establecimiento: str = "",
                   localidad: str = "", notas: str = "",
                   email: str = "", alertas_email_activas: int = 1,
@@ -870,6 +928,7 @@ def crear_cliente(nombre: str, contacto: str = "", establecimiento: str = "",
         return cur.lastrowid
 
 
+@_invalida_cache
 def registrar_alerta_enviada(fecha: str, cliente_id: Optional[int],
                               destinatario: str, asunto: str,
                               n_alertas: int, estado: str,
@@ -896,6 +955,7 @@ def registrar_alerta_enviada(fecha: str, cliente_id: Optional[int],
         )
 
 
+@_cache_lectura
 def obtener_lecturas_recientes(cliente_id: Optional[int],
                                 tipo: Optional[str] = None,
                                 limite: int = 3) -> List[str]:
@@ -948,6 +1008,7 @@ TIPOS_FOTO_LOTE = {
 }
 
 
+@_invalida_cache
 def registrar_foto_lote(lote_id: int, recordatorio_id: Optional[int],
                          tipo: str, archivo_path: str,
                          comentario: str = "",
@@ -966,6 +1027,7 @@ def registrar_foto_lote(lote_id: int, recordatorio_id: Optional[int],
         return cur.lastrowid
 
 
+@_cache_lectura
 def listar_fotos_lote(lote_id: int,
                        recordatorio_id: Optional[int] = None) -> List[Dict]:
     """Lista fotos de un lote. Si pasás recordatorio_id, solo las de
@@ -982,6 +1044,7 @@ def listar_fotos_lote(lote_id: int,
     return [dict(r) for r in rows]
 
 
+@_invalida_cache
 def eliminar_foto_lote(foto_id: int, borrar_archivo: bool = True) -> bool:
     """Borra una foto de la DB. Si borrar_archivo=True, también borra
     el archivo del disco. Devuelve True si se borró algo.
@@ -1006,6 +1069,7 @@ def eliminar_foto_lote(foto_id: int, borrar_archivo: bool = True) -> bool:
     return True
 
 
+@_invalida_cache
 def actualizar_comentario_foto(foto_id: int, comentario: str) -> bool:
     """Editar el comentario de una foto sin re-subir el archivo."""
     with get_conn() as conn:
@@ -1033,6 +1097,7 @@ def alerta_ya_enviada_hoy(cliente_id: Optional[int], destinatario: str,
         return r is not None
 
 
+@_invalida_cache
 def registrar_whatsapp_enviado(cliente_id: Optional[int],
                                  destinatario: str, clave_dedup: str,
                                  mensaje: str, estado: str,
@@ -1064,6 +1129,7 @@ def whatsapp_ya_enviado(clave_dedup: str, ventana_horas: int = 12) -> bool:
         return r is not None
 
 
+@_cache_lectura
 def listar_clientes() -> List[Dict]:
     with get_conn() as conn:
         rows = conn.execute(
@@ -1072,6 +1138,7 @@ def listar_clientes() -> List[Dict]:
         return [dict(r) for r in rows]
 
 
+@_cache_lectura
 def obtener_cliente(cliente_id: int) -> Optional[Dict]:
     with get_conn() as conn:
         r = conn.execute("SELECT * FROM clientes WHERE id = ?", (cliente_id,)).fetchone()
@@ -1109,6 +1176,7 @@ def reactivar_cliente(cliente_id: int) -> None:
     )
 
 
+@_invalida_cache
 def actualizar_cliente(cliente_id: int, **campos) -> None:
     if not campos:
         return
@@ -1118,6 +1186,7 @@ def actualizar_cliente(cliente_id: int, **campos) -> None:
         conn.execute(f"UPDATE clientes SET {sets} WHERE id = ?", valores)
 
 
+@_invalida_cache
 def eliminar_cliente(cliente_id: int) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM clientes WHERE id = ?", (cliente_id,))
@@ -1127,6 +1196,7 @@ def eliminar_cliente(cliente_id: int) -> None:
 # CONTACTOS (múltiples por cliente: productor + encargado + comedero, etc.)
 # =====================================================================
 
+@_cache_lectura
 def listar_contactos(cliente_id: int) -> List[Dict]:
     """Devuelve todos los contactos extra de un cliente (no incluye el principal)."""
     with get_conn() as conn:
@@ -1137,6 +1207,7 @@ def listar_contactos(cliente_id: int) -> List[Dict]:
         return [dict(r) for r in rows]
 
 
+@_invalida_cache
 def crear_contacto(cliente_id: int, nombre: str, rol: str = "",
                    email: str = "", whatsapp: str = "",
                    alertas_email_activas: int = 1,
@@ -1153,6 +1224,7 @@ def crear_contacto(cliente_id: int, nombre: str, rol: str = "",
         return cur.lastrowid
 
 
+@_cache_lectura
 def obtener_contacto(contacto_id: int) -> Optional[Dict]:
     with get_conn() as conn:
         r = conn.execute(
@@ -1161,6 +1233,7 @@ def obtener_contacto(contacto_id: int) -> Optional[Dict]:
         return dict(r) if r else None
 
 
+@_invalida_cache
 def actualizar_contacto(contacto_id: int, **campos) -> None:
     if not campos:
         return
@@ -1170,6 +1243,7 @@ def actualizar_contacto(contacto_id: int, **campos) -> None:
         conn.execute(f"UPDATE contactos SET {sets} WHERE id = ?", valores)
 
 
+@_invalida_cache
 def eliminar_contacto(contacto_id: int) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM contactos WHERE id = ?", (contacto_id,))
@@ -1229,6 +1303,7 @@ def listar_destinatarios(cliente: Dict) -> List[Dict]:
     return out
 
 
+@_cache_lectura
 def dias_alerta_consecutivos_previos(cliente_id: int,
                                         hasta_fecha: str) -> int:
     """Cuenta días consecutivos previos con alerta diaria enviada
@@ -1263,6 +1338,7 @@ def dias_alerta_consecutivos_previos(cliente_id: int,
     return racha
 
 
+@_invalida_cache
 def guardar_snapshot_pronostico(cliente_id: int, fecha_lunes: str,
                                   snapshot: list) -> None:
     """Guarda snapshot del pronóstico semanal (lunes).
@@ -1283,6 +1359,7 @@ def guardar_snapshot_pronostico(cliente_id: int, fecha_lunes: str,
         )
 
 
+@_cache_lectura
 def obtener_snapshot_pronostico(cliente_id: int,
                                   fecha_lunes: str) -> Optional[list]:
     """Devuelve el snapshot del lunes anterior para un cliente, o None."""
@@ -1301,6 +1378,7 @@ def obtener_snapshot_pronostico(cliente_id: int,
             return None
 
 
+@_invalida_cache
 def marcar_bienvenida_enviada(origen: str, id_: int, canal: str) -> None:
     """Marca la flag de bienvenida como enviada.
 
@@ -1321,6 +1399,7 @@ def marcar_bienvenida_enviada(origen: str, id_: int, canal: str) -> None:
 # LOTES
 # =====================================================================
 
+@_invalida_cache
 def crear_lote(cliente_id: int, identificador: str, corral: str = "",
                raza: str = "", categoria: str = "",
                fecha_ingreso: str = "", cantidad_inicial: int = 0,
@@ -1345,6 +1424,7 @@ def crear_lote(cliente_id: int, identificador: str, corral: str = "",
         return cur.lastrowid
 
 
+@_cache_lectura
 def listar_lotes(cliente_id: Optional[int] = None,
                   estado: Optional[str] = None) -> List[Dict]:
     """Devuelve lotes con datos del cliente y la última pesada."""
@@ -1373,6 +1453,7 @@ def listar_lotes(cliente_id: Optional[int] = None,
         return [dict(r) for r in rows]
 
 
+@_cache_lectura
 def obtener_lote(lote_id: int) -> Optional[Dict]:
     with get_conn() as conn:
         r = conn.execute(
@@ -1383,6 +1464,7 @@ def obtener_lote(lote_id: int) -> Optional[Dict]:
         return dict(r) if r else None
 
 
+@_invalida_cache
 def actualizar_lote(lote_id: int, **campos) -> None:
     if not campos:
         return
@@ -1392,6 +1474,7 @@ def actualizar_lote(lote_id: int, **campos) -> None:
         conn.execute(f"UPDATE lotes SET {sets} WHERE id = ?", valores)
 
 
+@_invalida_cache
 def eliminar_lote(lote_id: int) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM lotes WHERE id = ?", (lote_id,))
@@ -1421,6 +1504,7 @@ MOVIMIENTO_LABELS = {
 }
 
 
+@_invalida_cache
 def crear_movimiento_lote(
     lote_id: int,
     fecha: str,
@@ -1485,6 +1569,7 @@ def crear_movimiento_lote(
         return mov_id
 
 
+@_cache_lectura
 def listar_movimientos_lote(
     lote_id: int, hasta_fecha: Optional[str] = None,
 ) -> List[Dict]:
@@ -1499,6 +1584,7 @@ def listar_movimientos_lote(
         return [dict(r) for r in rows]
 
 
+@_cache_lectura
 def cantidad_vigente_lote(
     lote_id: int, fecha: Optional[str] = None,
 ) -> int:
@@ -1534,6 +1620,7 @@ def cantidad_vigente_lote(
     return max(0, base + delta)
 
 
+@_invalida_cache
 def eliminar_movimiento_lote(mov_id: int) -> None:
     """Elimina un movimiento. Si era parte de un traslado, también
     elimina el movimiento espejo en el lote destino (mismo fecha,
@@ -1570,6 +1657,7 @@ def eliminar_movimiento_lote(mov_id: int) -> None:
 # CARGAS DEL SILOCOMEDERO
 # =====================================================================
 
+@_invalida_cache
 def crear_carga_silocomedero(
     lote_id: int, fecha_carga: str, kg_cargados: float,
     detalles: str = "",
@@ -1624,6 +1712,7 @@ def crear_carga_silocomedero(
         return cur.lastrowid
 
 
+@_cache_lectura
 def listar_cargas_silocomedero(
     lote_id: int, limit: int = 30,
 ) -> List[Dict]:
@@ -1652,6 +1741,7 @@ def listar_cargas_silocomedero(
         return out
 
 
+@_cache_lectura
 def ultima_carga_silocomedero(lote_id: int) -> Optional[Dict]:
     """Devuelve la carga más reciente del SILO del lote, o None si no
     hay.
@@ -1674,6 +1764,7 @@ def ultima_carga_silocomedero(lote_id: int) -> Optional[Dict]:
         return dict(r) if r else None
 
 
+@_invalida_cache
 def eliminar_carga_silocomedero(carga_id: int) -> None:
     with get_conn() as conn:
         conn.execute(
@@ -1681,6 +1772,7 @@ def eliminar_carga_silocomedero(carga_id: int) -> None:
         )
 
 
+@_invalida_cache
 def actualizar_carga_silocomedero(
     carga_id: int,
     fecha_carga: Optional[str] = None,
@@ -1744,6 +1836,7 @@ def actualizar_carga_silocomedero(
 # DEDUP DE PEDIDOS DE CARGA POR WHATSAPP
 # =====================================================================
 
+@_cache_lectura
 def listar_avisos_enviados(
     cliente_id: Optional[int] = None,
     dias: int = 30,
@@ -1841,6 +1934,7 @@ def pedido_carga_ya_enviado(
         return r is not None
 
 
+@_invalida_cache
 def registrar_pedido_carga_enviado(
     lote_id: int, fecha: str, comida_n: int, intento_n: int = 1,
 ) -> None:
@@ -2055,6 +2149,7 @@ def diagnostico_alimentacion_lote(
 # HISTÓRICO DE IMPACTOS PRODUCTIVOS POR LOTE
 # =====================================================================
 
+@_invalida_cache
 def guardar_impacto_lote(lote_id: int, impacto: Dict,
                           tipo_evento: str = "frio",
                           severidad: str = "operativo",
@@ -2175,6 +2270,7 @@ def guardar_impacto_lote(lote_id: int, impacto: Dict,
         return cur.lastrowid
 
 
+@_cache_lectura
 def listar_impactos_lote(lote_id: int,
                            desde: Optional[str] = None,
                            hasta: Optional[str] = None,
@@ -2212,6 +2308,7 @@ def eliminar_impacto_lote(impacto_id: int) -> None:
 # PESADAS
 # =====================================================================
 
+@_invalida_cache
 def guardar_pesada(lote_id: int, fecha: str, metodo: str,
                     cantidad_animales: int, peso_promedio_kg: float,
                     peso_total_kg: float, desvio_kg: float,
@@ -2232,6 +2329,7 @@ def guardar_pesada(lote_id: int, fecha: str, metodo: str,
         return cur.lastrowid
 
 
+@_cache_lectura
 def listar_pesadas(lote_id: int) -> List[Dict]:
     with get_conn() as conn:
         rows = conn.execute(
@@ -2249,6 +2347,7 @@ def listar_pesadas(lote_id: int) -> List[Dict]:
         return result
 
 
+@_invalida_cache
 def eliminar_pesada(pesada_id: int) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM pesadas WHERE id = ?", (pesada_id,))
@@ -2258,6 +2357,7 @@ def eliminar_pesada(pesada_id: int) -> None:
 # DIETAS
 # =====================================================================
 
+@_invalida_cache
 def guardar_dieta(lote_id: int, fecha: str, composicion: List[Dict],
                    costo_dia: float = 0, pb_pct: float = 0,
                    em_mcal_dia: float = 0, consumo_ms_kg: float = 0,
@@ -2274,6 +2374,7 @@ def guardar_dieta(lote_id: int, fecha: str, composicion: List[Dict],
         return cur.lastrowid
 
 
+@_cache_lectura
 def listar_dietas(lote_id: int) -> List[Dict]:
     with get_conn() as conn:
         rows = conn.execute(
@@ -2295,6 +2396,7 @@ def listar_dietas(lote_id: int) -> List[Dict]:
 # ENTREGAS DE PRODUCTO (concentrados/núcleos al cliente)
 # =====================================================================
 
+@_invalida_cache
 def crear_entrega(
     cliente_id: int, producto_nombre: str, kg_total: float,
     fecha_entrega: str,
@@ -2340,6 +2442,7 @@ def crear_entrega(
         return cur.lastrowid
 
 
+@_cache_lectura
 def listar_entregas_cliente(cliente_id: int,
                               limit: int = 100) -> List[Dict]:
     """Devuelve todas las entregas de un cliente, ordenadas por fecha
@@ -2356,6 +2459,7 @@ def listar_entregas_cliente(cliente_id: int,
         return [dict(r) for r in rows]
 
 
+@_cache_lectura
 def listar_entregas_lote(lote_id: int) -> List[Dict]:
     """Devuelve entregas asociadas a un lote específico."""
     with get_conn() as conn:
@@ -2368,6 +2472,7 @@ def listar_entregas_lote(lote_id: int) -> List[Dict]:
         return [dict(r) for r in rows]
 
 
+@_cache_lectura
 def listar_entregas_periodo(
     fecha_desde: str, fecha_hasta: str,
 ) -> List[Dict]:
@@ -2396,6 +2501,7 @@ def listar_entregas_periodo(
         return [dict(r) for r in rows]
 
 
+@_invalida_cache
 def eliminar_entrega(entrega_id: int) -> None:
     """Borra un registro de entrega."""
     with get_conn() as conn:
@@ -2405,6 +2511,7 @@ def eliminar_entrega(entrega_id: int) -> None:
         )
 
 
+@_cache_lectura
 def obtener_entrega(entrega_id: int) -> Optional[Dict]:
     """Devuelve una entrega por id."""
     with get_conn() as conn:
@@ -2415,6 +2522,7 @@ def obtener_entrega(entrega_id: int) -> Optional[Dict]:
         return dict(r) if r else None
 
 
+@_invalida_cache
 def actualizar_entrega(entrega_id: int, **campos) -> None:
     """Edita una entrega existente. Soporta cualquier campo de la
     tabla `entregas_producto`. Útil para corregir precios cargados
@@ -2435,6 +2543,7 @@ def actualizar_entrega(entrega_id: int, **campos) -> None:
 # MÉTRICAS DEL LOTE
 # =====================================================================
 
+@_cache_lectura
 def calcular_evolucion_lote(lote_id: int) -> Dict:
     """Calcula ADG, ganancia total, días, etc. en base al histórico de pesadas."""
     pesadas = listar_pesadas(lote_id)
@@ -2481,6 +2590,7 @@ def calcular_evolucion_lote(lote_id: int) -> Dict:
     }
 
 
+@_cache_lectura
 def resumen_lote_para_ia(lote_id: int) -> str:
     """Genera un texto con todo el histórico del lote para inyectar en el agente IA."""
     lote = obtener_lote(lote_id)
@@ -2538,6 +2648,7 @@ def resumen_lote_para_ia(lote_id: int) -> str:
 # Manual + automáticos. Vinculado por cliente_id.
 # =====================================================================
 
+@_invalida_cache
 def crear_recordatorio_llamada(
     cliente_id: int,
     fecha_objetivo: str,
@@ -2555,6 +2666,7 @@ def crear_recordatorio_llamada(
         return cur.lastrowid
 
 
+@_cache_lectura
 def listar_recordatorios_pendientes(
     dias_hasta: int = 14,
     incluir_atrasados: bool = True,
@@ -2587,6 +2699,7 @@ def listar_recordatorios_pendientes(
         return [dict(r) for r in rows]
 
 
+@_cache_lectura
 def listar_recordatorios_cliente(
     cliente_id: int, incluir_completados: bool = True,
 ) -> list:
@@ -2605,6 +2718,7 @@ def listar_recordatorios_cliente(
         return [dict(r) for r in rows]
 
 
+@_invalida_cache
 def marcar_recordatorio_hecho(
     rid: int,
     notas: str = "",
@@ -2637,6 +2751,7 @@ def marcar_recordatorio_hecho(
         return True
 
 
+@_invalida_cache
 def cancelar_recordatorio(rid: int) -> bool:
     """Marca un recordatorio como cancelado (no se borra para
     mantener trazabilidad)."""
@@ -2651,6 +2766,7 @@ def cancelar_recordatorio(rid: int) -> bool:
         return True
 
 
+@_invalida_cache
 def reprogramar_recordatorio(rid: int, nueva_fecha: str) -> bool:
     """Cambia la fecha objetivo de un recordatorio pendiente."""
     with get_conn() as conn:
@@ -2682,6 +2798,7 @@ def _existe_recordatorio_auto(
         return (r["n"] if r else 0) > 0
 
 
+@_cache_lectura
 def armar_ficha_revision_cliente(cliente_id: int) -> dict:
     """Devuelve un snapshot técnico del cliente listo para una llamada.
 
@@ -2968,6 +3085,7 @@ def armar_ficha_revision_cliente(cliente_id: int) -> dict:
     return out
 
 
+@_invalida_cache
 def generar_sugerencias_recordatorios() -> int:
     """Crea recordatorios automáticos basados en eventos del sistema:
 

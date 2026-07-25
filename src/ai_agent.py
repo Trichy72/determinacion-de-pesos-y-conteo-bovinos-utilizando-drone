@@ -2087,6 +2087,9 @@ def _ejecutar_tool(tool_name: str, tool_input: Dict, ingredientes_session: Optio
                         (lote_id,),
                     )
                     dietas_borradas = cur.rowcount
+                # Escritura directa (sin función de database.py) →
+                # invalidar el cache de lecturas a mano.
+                _db.invalidar_cache_lecturas()
 
             # Guardar cada fase como una dieta separada
             ids_guardados = []

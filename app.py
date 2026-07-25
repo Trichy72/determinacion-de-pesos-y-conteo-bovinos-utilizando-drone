@@ -724,6 +724,9 @@ def _render_form_edicion_rapida(*, recordatorio_id, datos_actuales,
                     (_json.dumps(_ev, ensure_ascii=False),
                      recordatorio_id),
                 )
+            # Escritura directa (sin pasar por función de database.py)
+            # → invalidar el cache de lecturas a mano.
+            db.invalidar_cache_lecturas()
             _st.success(
                 "✅ Consulta actualizada. Recargá la página para "
                 "ver los cambios reflejados."
@@ -3392,52 +3395,11 @@ with tab_inicio:
         )
         _hoy_log = datetime.now().date()
 
-        # ── Fast path: cachear queries DB durante el render ──
-        # Sin esto, calcular_stock_actual + calcular_consumo_diario_kg
-        # llaman a listar_dietas / listar_entregas_cliente cientos de
-        # veces (loop día por día hasta agotamiento). Con cache de
-        # request-scope, cortamos ~90% de las queries y bajamos el
-        # tiempo de 30-60s a 2-5s.
-        import src.database as _db_mod_ct
-        import functools as _ft_ct
-        if not hasattr(_db_mod_ct, "_ORIG_DASH_CACHE"):
-            _db_mod_ct._ORIG_DASH_CACHE = {
-                "listar_dietas": _db_mod_ct.listar_dietas,
-                "listar_entregas_cliente": _db_mod_ct.listar_entregas_cliente,
-                "listar_entregas_lote": _db_mod_ct.listar_entregas_lote,
-                "listar_lotes": _db_mod_ct.listar_lotes,
-                "listar_clientes": _db_mod_ct.listar_clientes,
-                "ultima_carga_silocomedero": _db_mod_ct.ultima_carga_silocomedero,
-            }
-        _orig_ct = _db_mod_ct._ORIG_DASH_CACHE
-        # Cache TTL GLOBAL a nivel de proceso (compartido entre TODAS
-        # las sesiones y runs). 1ra carga hidrata, las siguientes N
-        # segundos vuelan sin ir a la DB. Perfecto para reunión con
-        # cliente donde se navega mucho entre pestañas.
-        if not hasattr(_db_mod_ct, "_TTL_CACHE"):
-            _db_mod_ct._TTL_CACHE = {}
-        _ttl_cache = _db_mod_ct._TTL_CACHE
-        _TTL_SEC = 90  # cache global 90s
-
-        import time as _time_ttl_ct
-
-        def _mk_cached(nombre, fn):
-            def _wrapper(*args, **kwargs):
-                key = (nombre, args, tuple(sorted(kwargs.items())))
-                now = _time_ttl_ct.time()
-                if key in _ttl_cache:
-                    ts, val = _ttl_cache[key]
-                    if now - ts < _TTL_SEC:
-                        return val
-                val = fn(*args, **kwargs)
-                _ttl_cache[key] = (now, val)
-                return val
-            _wrapper.__wrapped__ = fn
-            return _wrapper
-
-        # Monkey-patch: usar versión cacheada durante el bloque
-        for _nom, _fn in _orig_ct.items():
-            setattr(_db_mod_ct, _nom, _mk_cached(_nom, _fn))
+        # NOTA perf: las lecturas de src/database.py ya vienen con
+        # cache TTL process-wide (decorator _cache_lectura en el
+        # módulo) con invalidación automática en cada escritura. El
+        # viejo monkey-patch de funciones aquí quedó obsoleto y se
+        # eliminó.
 
         # ── Cache del cálculo pesado (5 min TTL) ──
         # El loop hace ~50 queries a Postgres remoto que suman 15-60s
@@ -3458,8 +3420,7 @@ with tab_inicio:
                 # Invalidar también el TTL cache global de queries DB
                 try:
                     import src.database as _db_inv
-                    if hasattr(_db_inv, "_TTL_CACHE"):
-                        _db_inv._TTL_CACHE.clear()
+                    _db_inv.invalidar_cache_lecturas()
                 except Exception:
                     pass
                 # Forzar recomputo saltando el blob precomputado por
@@ -4249,15 +4210,6 @@ with tab_inicio:
         )
         with st.expander("Ver traceback completo"):
             st.code(_tb_log.format_exc(), language="python")
-    finally:
-        # Restaurar funciones DB originales (revertir monkey-patch)
-        try:
-            import src.database as _db_mod_ct_rst
-            if hasattr(_db_mod_ct_rst, "_ORIG_DASH_CACHE"):
-                for _n, _fn in _db_mod_ct_rst._ORIG_DASH_CACHE.items():
-                    setattr(_db_mod_ct_rst, _n, _fn)
-        except Exception:
-            pass
 
     st.divider()
 
