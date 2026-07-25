@@ -3496,12 +3496,13 @@ with tab_inicio:
                     _cache_db.pop("_edad_seg", 0) or 0
                 )
                 st.session_state["_dash_stock"] = _cache_db
-                # Retrasar el ts local con la edad del blob para
-                # que el TTL de 5min del session_state coincida
-                # con la edad real de la data.
-                st.session_state["_dash_stock_ts"] = (
-                    _t_c.time() - _edad_cache_db
-                )
+                # ts = AHORA (no restar la edad del blob). Si le
+                # restáramos la edad, el TTL de 5 min del
+                # session_state invalidaría cualquier blob >5 min
+                # y volveríamos a recalcular — el bug que hacía
+                # que el dashboard tarde 1 min. La frescura del
+                # blob ya la validó leer_dashboard_cache (6hs).
+                st.session_state["_dash_stock_ts"] = _t_c.time()
 
         _cache_valida = (
             "_dash_stock" in st.session_state
