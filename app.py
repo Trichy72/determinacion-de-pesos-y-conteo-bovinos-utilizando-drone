@@ -3481,17 +3481,36 @@ with tab_inicio:
         _edad_cache_db = None
         _debug_cache = None  # para diagnosticar por qué NO se lee el blob
         if "_dash_stock" not in st.session_state and not _force_recompute:
+            # Diagnóstico: ¿qué backend usa Streamlit? ¿existe la tabla?
+            _dbg_backend = "unknown"
+            _dbg_rows = "unknown"
+            try:
+                from src.database import (
+                    get_conn as _get_conn_dbg,
+                    usando_postgres as _up_dbg,
+                )
+                _dbg_backend = "postgres" if _up_dbg() else "sqlite"
+                try:
+                    with _get_conn_dbg() as _conn_dbg:
+                        _r_dbg = _conn_dbg.execute(
+                            "SELECT COUNT(*) AS n FROM dashboard_cache"
+                        ).fetchone()
+                        _dbg_rows = str(_r_dbg["n"] if _r_dbg else 0)
+                except Exception as _e_tab:
+                    _dbg_rows = f"query falla: {type(_e_tab).__name__}: {_e_tab}"
+            except Exception as _e_bk:
+                _dbg_backend = f"error import: {_e_bk}"
             try:
                 _cache_db = db.leer_dashboard_cache(
                     "logistica_v1", max_edad_seg=900,
                 )
                 if _cache_db is None:
-                    _debug_cache = "cache_db=None (no existe o >15min)"
+                    _debug_cache = f"cache_db=None (backend={_dbg_backend}, filas_tabla={_dbg_rows})"
                 else:
-                    _debug_cache = f"cache_db OK, edad={_cache_db.get('_edad_seg',0):.0f}s"
+                    _debug_cache = f"cache_db OK, edad={_cache_db.get('_edad_seg',0):.0f}s (backend={_dbg_backend})"
             except Exception as _e_cache:
                 _cache_db = None
-                _debug_cache = f"ERROR: {type(_e_cache).__name__}: {_e_cache}"
+                _debug_cache = f"ERROR: {type(_e_cache).__name__}: {_e_cache} (backend={_dbg_backend})"
             if _debug_cache:
                 st.caption(f"🐛 debug precompute: {_debug_cache}")
             if _cache_db:
