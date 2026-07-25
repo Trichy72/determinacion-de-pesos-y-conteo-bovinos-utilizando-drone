@@ -3485,8 +3485,8 @@ with tab_inicio:
             _dbg_backend = "unknown"
             _dbg_rows = "unknown"
             try:
-                from src.database import (
-                    get_conn as _get_conn_dbg,
+                from src.database import get_conn as _get_conn_dbg
+                from src.db_backend import (
                     usando_postgres as _up_dbg,
                 )
                 _dbg_backend = "postgres" if _up_dbg() else "sqlite"
