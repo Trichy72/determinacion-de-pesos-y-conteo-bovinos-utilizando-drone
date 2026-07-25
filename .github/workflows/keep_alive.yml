@@ -42,17 +42,11 @@ jobs:
         run: python scripts/precompute_dashboard.py
 
       - name: Ping app (mantener Streamlit despierta)
+        # Best-effort: NUNCA falla el workflow. El precompute (paso
+        # anterior) es lo importante. curl con --max-redirs alto porque
+        # Streamlit dormida entra en loop de redirects (error 47).
         run: |
-          set -e
           URL="https://determinacion-de-pesos-y-conteo-bovinos-utilizando-drone-9s6v3.streamlit.app/"
-          CODE=$(curl -sS -o /dev/null -w "%{http_code}" -L --max-time 60 "$URL")
-          echo "HTTP $CODE - $(date -u)"
-          # Streamlit devuelve 200 si está viva, 303 si redirige a wake-up
-          if [ "$CODE" = "200" ] || [ "$CODE" = "303" ]; then
-            exit 0
-          fi
-          # Retry una vez si falla — puede que estuviera dormida
-          sleep 10
-          CODE2=$(curl -sS -o /dev/null -w "%{http_code}" -L --max-time 90 "$URL")
-          echo "Retry HTTP $CODE2"
-          [ "$CODE2" = "200" ] || [ "$CODE2" = "303" ]
+          CODE=$(curl -sS -o /dev/null -w "%{http_code}" -L --max-redirs 100 --max-time 90 "$URL" || echo "err")
+          echo "Ping HTTP $CODE - $(date -u)"
+          exit 0
