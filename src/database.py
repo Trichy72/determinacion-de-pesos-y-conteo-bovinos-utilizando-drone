@@ -1117,14 +1117,24 @@ def whatsapp_ya_enviado(clave_dedup: str, ventana_horas: int = 12) -> bool:
 
     Sirve para no spamear: si el clima sigue crítico hora tras hora, no
     repetimos la misma alerta cada vez que corre el cron.
+
+    Nota Postgres: `fecha_creacion` quedó como TEXT tras la migración
+    desde SQLite, así que comparar contra NOW() (timestamptz) tira
+    "operator does not exist: text >= timestamp with time zone".
+    Calculamos el corte en Python (UTC, formato ISO) y comparamos
+    texto-contra-texto — lexicográficamente correcto en ambos backends.
     """
+    from datetime import datetime as _dt_wa, timedelta as _td_wa, timezone as _tz_wa
+    _corte = (
+        _dt_wa.now(_tz_wa.utc) - _td_wa(hours=int(ventana_horas))
+    ).strftime("%Y-%m-%d %H:%M:%S")
     with get_conn() as conn:
         r = conn.execute(
-            f"SELECT 1 FROM alertas_whatsapp_enviadas "
-            f"WHERE clave_dedup = ? AND estado = 'enviada' "
-            f"AND fecha_creacion >= datetime('now', '-{int(ventana_horas)} hours') "
-            f"LIMIT 1",
-            (clave_dedup,),
+            "SELECT 1 FROM alertas_whatsapp_enviadas "
+            "WHERE clave_dedup = ? AND estado = 'enviada' "
+            "AND fecha_creacion >= ? "
+            "LIMIT 1",
+            (clave_dedup, _corte),
         ).fetchone()
         return r is not None
 
