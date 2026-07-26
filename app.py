@@ -1952,7 +1952,49 @@ with tab_inicio:
     # flujo del cache.
     _ph_prioridades = st.empty()
 
-    st.divider()
+
+    # ── Query param del panel de prioridades (tarjetas clickeables) ──
+    # Se preserva `lote_id` si está en la URL (persistencia de lote):
+    # los links de las tarjetas solo agregan/cambian `panel`, y el
+    # link Cerrar solo remueve `panel`.
+    try:
+        _panel_pri_sel = st.query_params.get("panel")
+    except Exception:
+        _panel_pri_sel = None
+    try:
+        _qp_lote_keep = st.query_params.get("lote_id")
+    except Exception:
+        _qp_lote_keep = None
+    _qs_lote_keep = (
+        f"&lote_id={_qp_lote_keep}" if _qp_lote_keep else ""
+    )
+    _href_cerrar_pri = (
+        f"?lote_id={_qp_lote_keep}" if _qp_lote_keep else "?"
+    )
+
+    # ── Slots de layout ──
+    # El orden VISUAL de la pestaña Inicio se define acá con
+    # containers; el código que llena cada slot corre más abajo,
+    # en el orden que exige el cálculo (stock precomputado, clima,
+    # recordatorios), y renderiza en el container que le toca.
+    _cont_panel_pri = st.container()     # detalle prioridad clickeada
+    _cont_eval = st.container()          # sugerencias última evaluación
+    _cont_clientes = st.container()      # grilla MIS CLIENTES
+    _cont_entrega = st.container()       # entrega rápida + actualizar
+    _cont_agenda_clima = st.container()  # agenda semana | clima impacta
+    _cont_llamados = st.container()      # expander llamados pendientes
+    _cont_clima_det = st.container()     # expander clima detallado
+    _cont_pesar = st.container()         # expander lotes a pesar
+    _cont_silo = st.container()          # expander autonomía silo
+    _cont_logistica = st.container()     # expander detalle logístico
+    _cont_avisos = st.container()        # expander avisos enviados
+    _cont_guia = st.container()          # guía rápida
+    with _cont_logistica:
+        _exp_logistica = st.expander(
+            "📦 Detalle logístico — KPIs del mes, entregas y stock",
+            expanded=False,
+        )
+
 
     # =================================================================
     # Avisos enviados (auditoría rápida)
@@ -1962,70 +2004,70 @@ with tab_inicio:
     # críticos, informes semanales, etc. Útil para verificar al toque
     # qué se envió hoy / esta semana sin tener que ir cliente por
     # cliente.
-    with st.expander(
-        "📨 Avisos enviados últimos 7 días",
-        expanded=False,
-    ):
-        st.caption(
-            "Auditoría rápida de todo lo que el sistema mandó por "
-            "email o WhatsApp a los clientes en la última semana. "
-            "Para ver el detalle por cliente, entrá a su ficha en "
-            "🏢 Clientes/Lotes."
-        )
-        _avisos_dash = db.listar_avisos_enviados(
-            cliente_id=None, dias=7, limit=100,
-        )
-        if not _avisos_dash:
-            st.info(
-                "Sin avisos enviados en los últimos 7 días."
+    with _cont_avisos:
+        with st.expander(
+            "📨 Avisos enviados últimos 7 días",
+            expanded=False,
+        ):
+            st.caption(
+                "Auditoría rápida de todo lo que el sistema mandó por "
+                "email o WhatsApp a los clientes en la última semana. "
+                "Para ver el detalle por cliente, entrá a su ficha en "
+                "🏢 Clientes/Lotes."
             )
-        else:
-            # Resumen arriba
-            _n_email = sum(
-                1 for a in _avisos_dash if a["canal"] == "email"
+            _avisos_dash = db.listar_avisos_enviados(
+                cliente_id=None, dias=7, limit=100,
             )
-            _n_wa = sum(
-                1 for a in _avisos_dash if a["canal"] == "whatsapp"
-            )
-            _clientes_unicos = len({
-                a.get("cliente_id") for a in _avisos_dash
-                if a.get("cliente_id")
-            })
-            _k1, _k2, _k3 = st.columns(3)
-            _k1.metric("📧 Emails", _n_email)
-            _k2.metric("📱 WhatsApp", _n_wa)
-            _k3.metric("👥 Clientes alcanzados", _clientes_unicos)
-            # Tabla
-            _ICONOS_CANAL = {"email": "📧", "whatsapp": "📱"}
-            _filas_dash = []
-            for av in _avisos_dash[:50]:
-                _ico = _ICONOS_CANAL.get(av["canal"], "•")
-                _fc = (av.get("fecha_creacion") or "")[:16]
-                _est = av.get("estado") or "—"
-                _est_ico = (
-                    "✅" if str(_est).lower()
-                    in ("enviada", "ok", "sent")
-                    else ("❌" if av.get("error") else "⏳")
+            if not _avisos_dash:
+                st.info(
+                    "Sin avisos enviados en los últimos 7 días."
                 )
-                _filas_dash.append({
-                    "Cuándo": _fc,
-                    "Cliente": (av.get("cliente_nombre")
-                                 or "(admin)")[:30],
-                    "Canal": f"{_ico} {av['canal']}",
-                    "Asunto / motivo":
-                        (av.get("asunto") or "")[:70],
-                    "Estado": f"{_est_ico} {_est}",
+            else:
+                # Resumen arriba
+                _n_email = sum(
+                    1 for a in _avisos_dash if a["canal"] == "email"
+                )
+                _n_wa = sum(
+                    1 for a in _avisos_dash if a["canal"] == "whatsapp"
+                )
+                _clientes_unicos = len({
+                    a.get("cliente_id") for a in _avisos_dash
+                    if a.get("cliente_id")
                 })
-            st.dataframe(
-                pd.DataFrame(_filas_dash),
-                hide_index=True, width="stretch",
-            )
-            if len(_avisos_dash) > 50:
-                st.caption(
-                    f"_Mostrando 50 de {len(_avisos_dash)} avisos._"
+                _k1, _k2, _k3 = st.columns(3)
+                _k1.metric("📧 Emails", _n_email)
+                _k2.metric("📱 WhatsApp", _n_wa)
+                _k3.metric("👥 Clientes alcanzados", _clientes_unicos)
+                # Tabla
+                _ICONOS_CANAL = {"email": "📧", "whatsapp": "📱"}
+                _filas_dash = []
+                for av in _avisos_dash[:50]:
+                    _ico = _ICONOS_CANAL.get(av["canal"], "•")
+                    _fc = (av.get("fecha_creacion") or "")[:16]
+                    _est = av.get("estado") or "—"
+                    _est_ico = (
+                        "✅" if str(_est).lower()
+                        in ("enviada", "ok", "sent")
+                        else ("❌" if av.get("error") else "⏳")
+                    )
+                    _filas_dash.append({
+                        "Cuándo": _fc,
+                        "Cliente": (av.get("cliente_nombre")
+                                     or "(admin)")[:30],
+                        "Canal": f"{_ico} {av['canal']}",
+                        "Asunto / motivo":
+                            (av.get("asunto") or "")[:70],
+                        "Estado": f"{_est_ico} {_est}",
+                    })
+                st.dataframe(
+                    pd.DataFrame(_filas_dash),
+                    hide_index=True, width="stretch",
                 )
+                if len(_avisos_dash) > 50:
+                    st.caption(
+                        f"_Mostrando 50 de {len(_avisos_dash)} avisos._"
+                    )
 
-    st.divider()
 
     # ─── Mostrar acciones sugeridas de la ÚLTIMA evaluación ───
     # Si recién guardó una evaluación, mostrar el resumen acá
@@ -2034,67 +2076,68 @@ with tab_inicio:
         "ultimo_analisis_evaluacion"
     )
     if _ultimo_eval:
-        st.markdown("### 🎯 Acciones sugeridas — última evaluación")
-        st.markdown(
-            f"**Cliente:** {_ultimo_eval['cliente']}  ·  "
-            f"{_ultimo_eval['resumen']}"
-        )
-
-        # ── Análisis del agente IA (arriba, prominente) ──
-        _llm_md = _ultimo_eval.get("analisis_llm_md", "")
-        _llm_err = _ultimo_eval.get("analisis_llm_error", "")
-        if _llm_md:
+        with _cont_eval:
+            st.markdown("### 🎯 Acciones sugeridas — última evaluación")
             st.markdown(
-                "<div style='background:#f0f7ff;"
-                "border-left:4px solid #2c7be5;"
-                "padding:12px 16px;border-radius:6px;"
-                "margin:8px 0;'>"
-                "<b>🤖 Diagnóstico del Asesor IA:</b>"
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(_llm_md)
-        elif _llm_err:
-            st.warning(
-                f"🤖 No se pudo obtener análisis del agente IA: "
-                f"{_llm_err}"
+                f"**Cliente:** {_ultimo_eval['cliente']}  ·  "
+                f"{_ultimo_eval['resumen']}"
             )
 
-        # ── Cruces stock vs dieta ──
-        if _ultimo_eval.get("alertas_cruce"):
-            st.markdown("**🧮 Cruces stock vs dieta:**")
-            for _alerta in _ultimo_eval["alertas_cruce"]:
-                st.info(_alerta)
-
-        # ── Sugerencias del motor de reglas ──
-        if _ultimo_eval.get("sugerencias"):
-            st.markdown(
-                "**⚡ Alertas rápidas (motor de reglas):**"
-            )
-            for _sug in _ultimo_eval["sugerencias"]:
-                _box_func = (
-                    st.error if _sug["severidad"] == "urgente"
-                    else st.warning
-                    if _sug["severidad"] == "atencion"
-                    else st.info
+            # ── Análisis del agente IA (arriba, prominente) ──
+            _llm_md = _ultimo_eval.get("analisis_llm_md", "")
+            _llm_err = _ultimo_eval.get("analisis_llm_error", "")
+            if _llm_md:
+                st.markdown(
+                    "<div style='background:#f0f7ff;"
+                    "border-left:4px solid #2c7be5;"
+                    "padding:12px 16px;border-radius:6px;"
+                    "margin:8px 0;'>"
+                    "<b>🤖 Diagnóstico del Asesor IA:</b>"
+                    "</div>",
+                    unsafe_allow_html=True,
                 )
-                _box_func(
-                    f"{_sug['icono']} **{_sug['titulo']}**  \n"
-                    f"{_sug['detalle']}"
+                st.markdown(_llm_md)
+            elif _llm_err:
+                st.warning(
+                    f"🤖 No se pudo obtener análisis del agente IA: "
+                    f"{_llm_err}"
                 )
 
-        _cb1, _cb2 = st.columns([1, 4])
-        if _cb1.button(
-            "✖ Ocultar sugerencias",
-            key="ocultar_ultimo_eval",
-        ):
-            del st.session_state["ultimo_analisis_evaluacion"]
-            st.rerun()
-        st.caption(
-            "_Diagnóstico IA + alertas + cruces quedaron también "
-            "guardados en el historial de llamadas del cliente._"
-        )
-        st.divider()
+            # ── Cruces stock vs dieta ──
+            if _ultimo_eval.get("alertas_cruce"):
+                st.markdown("**🧮 Cruces stock vs dieta:**")
+                for _alerta in _ultimo_eval["alertas_cruce"]:
+                    st.info(_alerta)
+
+            # ── Sugerencias del motor de reglas ──
+            if _ultimo_eval.get("sugerencias"):
+                st.markdown(
+                    "**⚡ Alertas rápidas (motor de reglas):**"
+                )
+                for _sug in _ultimo_eval["sugerencias"]:
+                    _box_func = (
+                        st.error if _sug["severidad"] == "urgente"
+                        else st.warning
+                        if _sug["severidad"] == "atencion"
+                        else st.info
+                    )
+                    _box_func(
+                        f"{_sug['icono']} **{_sug['titulo']}**  \n"
+                        f"{_sug['detalle']}"
+                    )
+
+            _cb1, _cb2 = st.columns([1, 4])
+            if _cb1.button(
+                "✖ Ocultar sugerencias",
+                key="ocultar_ultimo_eval",
+            ):
+                del st.session_state["ultimo_analisis_evaluacion"]
+                st.rerun()
+            st.caption(
+                "_Diagnóstico IA + alertas + cruces quedaron también "
+                "guardados en el historial de llamadas del cliente._"
+            )
+            st.divider()
 
     # ─── 📞 Llamados pendientes a clientes ───
     # Bloque que junta los recordatorios manuales + sugerencias
@@ -2102,1242 +2145,1258 @@ with tab_inicio:
     # Visible arriba para que sea lo primero que ves al abrir la
     # app — es el "ojo del negocio": chequear el lote del cliente
     # con una llamada antes de que algo se complique.
-    st.markdown("### 📞 Llamados pendientes a clientes")
-    try:
-        # Generar sugerencias automáticas al cargar el dashboard.
-        # La función ya tiene dedup interno (ventana 14-21 días),
-        # así que no spamea aunque se llame en cada reload.
-        _n_nuevos = db.generar_sugerencias_recordatorios()
-        if _n_nuevos > 0:
-            st.toast(
-                f"📞 {_n_nuevos} llamado(s) sugerido(s) por el "
-                "sistema. Revisalos abajo.",
-                icon="📞",
+    with _cont_llamados:
+        try:
+            # Generar sugerencias automáticas al cargar el dashboard.
+            # La función ya tiene dedup interno (ventana 14-21 días),
+            # así que no spamea aunque se llame en cada reload.
+            _n_nuevos = db.generar_sugerencias_recordatorios()
+            if _n_nuevos > 0:
+                st.toast(
+                    f"📞 {_n_nuevos} llamado(s) sugerido(s) por el "
+                    "sistema. Revisalos abajo.",
+                    icon="📞",
+                )
+        except Exception:
+            pass
+
+        _recos = []
+        try:
+            _recos = db.listar_recordatorios_pendientes(
+                dias_hasta=14, incluir_atrasados=True,
             )
-    except Exception:
-        pass
+        except Exception as _e:
+            st.warning(f"No pude leer recordatorios: {_e}")
 
-    _recos = []
-    try:
-        _recos = db.listar_recordatorios_pendientes(
-            dias_hasta=14, incluir_atrasados=True,
-        )
-    except Exception as _e:
-        st.warning(f"No pude leer recordatorios: {_e}")
-
-    # ─── Botón único: programar futuro llamado ───
-    # El registro/evaluación detallada ya no se hace acá — se hace
-    # desde la ficha clínica del lote (botón 📝 Registrar nueva
-    # consulta). El dashboard es resumen.
-    _col_btn_reco, _col_info_reco = st.columns([1, 3])
-    with _col_btn_reco:
-        if st.button(
-            "➕ Programar futuro llamado",
-            key="btn_nuevo_recordatorio",
-            width="stretch",
-            help=(
-                "Anotar un llamado a hacer en una fecha futura. "
-                "Te va a aparecer en este bloque ese día."
-            ),
+        with st.expander(
+            f"📞 Llamados pendientes ({len(_recos)})",
+            expanded=False,
         ):
-            st.session_state["mostrar_form_recordatorio"] = True
-    with _col_info_reco:
-        if _recos:
-            _hoy_iso_r = datetime.now().date().isoformat()
-            _atrasados = sum(
-                1 for r in _recos
-                if r["fecha_objetivo"] < _hoy_iso_r
-            )
-            _hoy_n = sum(
-                1 for r in _recos
-                if r["fecha_objetivo"] == _hoy_iso_r
-            )
-            _futuros = len(_recos) - _atrasados - _hoy_n
-            _msg_partes = []
-            if _atrasados:
-                _msg_partes.append(
-                    f"🔴 **{_atrasados}** atrasado(s)"
-                )
-            if _hoy_n:
-                _msg_partes.append(f"🟡 **{_hoy_n}** para HOY")
-            if _futuros:
-                _msg_partes.append(
-                    f"🟢 **{_futuros}** próximos"
-                )
-            st.markdown(" · ".join(_msg_partes))
-        else:
-            st.caption("✅ No tenés llamados pendientes.")
-
-    # ─── Form de nuevo recordatorio ───
-    if st.session_state.get("mostrar_form_recordatorio"):
-        with st.form("form_recordatorio_nuevo"):
-            st.markdown("##### Nuevo recordatorio de llamado")
-            _clientes_reco = db.listar_clientes()
-            _opciones_cli = {
-                f"{c['nombre']} ({c.get('localidad','')})": c["id"]
-                for c in _clientes_reco
-                if (c.get("estado") or "activo") == "activo"
-            }
-            _col_r1, _col_r2 = st.columns([2, 1])
-            _cli_sel = _col_r1.selectbox(
-                "Cliente",
-                options=list(_opciones_cli.keys()),
-                key="reco_cliente_nuevo",
-            )
-            _fecha_reco = _col_r2.date_input(
-                "Cuándo llamarlo",
-                value=datetime.now().date(),
-                key="reco_fecha_nueva",
-            )
-            _motivo_reco = st.text_area(
-                "Motivo / qué chequear",
-                placeholder=(
-                    "Ej: chequear consumo del silo, ver cómo "
-                    "anda la adaptación de los terneros, "
-                    "coordinar próxima entrega..."
-                ),
-                key="reco_motivo_nuevo",
-                height=80,
-            )
-            _c_btn1, _c_btn2 = st.columns(2)
-            _ok_nuevo = _c_btn1.form_submit_button(
-                "✅ Programar", type="primary", width="stretch",
-            )
-            _cancel_nuevo = _c_btn2.form_submit_button(
-                "✖ Cancelar", width="stretch",
-            )
-            if _ok_nuevo and _cli_sel:
-                try:
-                    db.crear_recordatorio_llamada(
-                        cliente_id=_opciones_cli[_cli_sel],
-                        fecha_objetivo=_fecha_reco.isoformat(),
-                        motivo=_motivo_reco or "",
-                        origen="manual",
+            # ─── Botón único: programar futuro llamado ───
+            # El registro/evaluación detallada ya no se hace acá — se hace
+            # desde la ficha clínica del lote (botón 📝 Registrar nueva
+            # consulta). El dashboard es resumen.
+            _col_btn_reco, _col_info_reco = st.columns([1, 3])
+            with _col_btn_reco:
+                if st.button(
+                    "➕ Programar futuro llamado",
+                    key="btn_nuevo_recordatorio",
+                    width="stretch",
+                    help=(
+                        "Anotar un llamado a hacer en una fecha futura. "
+                        "Te va a aparecer en este bloque ese día."
+                    ),
+                ):
+                    st.session_state["mostrar_form_recordatorio"] = True
+            with _col_info_reco:
+                if _recos:
+                    _hoy_iso_r = datetime.now().date().isoformat()
+                    _atrasados = sum(
+                        1 for r in _recos
+                        if r["fecha_objetivo"] < _hoy_iso_r
                     )
-                    st.success(
-                        f"✅ Llamado programado para "
-                        f"{_fecha_reco.strftime('%d/%m/%Y')}"
+                    _hoy_n = sum(
+                        1 for r in _recos
+                        if r["fecha_objetivo"] == _hoy_iso_r
                     )
-                    st.session_state["mostrar_form_recordatorio"] = False
-                    st.rerun()
-                except Exception as _e:
-                    st.error(f"Error: {_e}")
-            elif _cancel_nuevo:
-                st.session_state["mostrar_form_recordatorio"] = False
-                st.rerun()
-
-    # _form_registrar_ya: removido del dashboard.
-    # Las conversaciones espontáneas ahora se registran desde la
-    # ficha clínica del lote (botón "📝 Registrar nueva consulta").
-    if False:
-        pass
-
-    # ─── Lista de recordatorios pendientes ───
-    if _recos:
-        _hoy_d = datetime.now().date()
-        for _r in _recos:
-            try:
-                _fobj = datetime.strptime(
-                    _r["fecha_objetivo"], "%Y-%m-%d"
-                ).date()
-            except Exception:
-                _fobj = _hoy_d
-            _delta_d = (_fobj - _hoy_d).days
-            if _delta_d < 0:
-                _ico_r = "🔴"
-                _txt_d = f"Atrasado {abs(_delta_d)} día(s)"
-            elif _delta_d == 0:
-                _ico_r = "🟡"
-                _txt_d = "HOY"
-            elif _delta_d == 1:
-                _ico_r = "🟢"
-                _txt_d = "Mañana"
-            else:
-                _ico_r = "🟢"
-                _txt_d = f"En {_delta_d} días"
-
-            # Etiqueta de origen
-            _orig = _r.get("origen", "manual")
-            _ico_orig = (
-                "✋ Manual"
-                if _orig == "manual"
-                else "🤖 Sugerido"
-            )
-
-            # ─── Lista compacta ─── un renglón por recordatorio
-            # con cliente + fecha + motivo + atajos rápidos. El
-            # trabajo pesado (ficha técnica, evaluación, ver historial
-            # clínico) se hace desde la ficha del lote.
-            _cols_r = st.columns([3, 1, 1, 1])
-            with _cols_r[0]:
-                _motivo_short = (
-                    (_r.get("motivo", "") or "").strip()
-                )
-                if len(_motivo_short) > 140:
-                    _motivo_short = _motivo_short[:137] + "..."
-                st.markdown(
-                    f"{_ico_r} **{_r['cliente_nombre']}** · "
-                    f"{_fobj.strftime('%d/%m/%Y')} "
-                    f"_({_txt_d})_ · {_ico_orig}"
-                )
-                if _motivo_short:
-                    st.caption(f"📝 {_motivo_short}")
-                if _r.get("cliente_localidad"):
-                    st.caption(
-                        f"📍 {_r['cliente_localidad']}"
-                    )
-
-            # Atajo: ir directo a la ficha del lote más reciente
-            # del cliente (donde está la ficha clínica completa)
-            with _cols_r[1]:
-                _lotes_cli_r = []
-                try:
-                    _lotes_cli_r = db.listar_lotes(
-                        cliente_id=_r["cliente_id"], estado="activo",
-                    ) or []
-                except Exception:
-                    pass
-                if _lotes_cli_r:
-                    _lt_pri = _lotes_cli_r[0]
-                    if st.button(
-                        "🩺 Ir al lote",
-                        key=f"go_lote_{_r['id']}",
-                        width="stretch",
-                        help=(
-                            f"Abrir la ficha clínica del lote "
-                            f"'{_lt_pri.get('identificador','')}' "
-                            "donde está toda la historia + el "
-                            "botón para registrar una nueva consulta."
-                        ),
-                    ):
-                        st.session_state["lote_detalle_id"] = (
-                            _lt_pri["id"]
+                    _futuros = len(_recos) - _atrasados - _hoy_n
+                    _msg_partes = []
+                    if _atrasados:
+                        _msg_partes.append(
+                            f"🔴 **{_atrasados}** atrasado(s)"
                         )
-                        st.query_params["lote_id"] = str(
-                            _lt_pri["id"]
+                    if _hoy_n:
+                        _msg_partes.append(f"🟡 **{_hoy_n}** para HOY")
+                    if _futuros:
+                        _msg_partes.append(
+                            f"🟢 **{_futuros}** próximos"
                         )
-                        st.rerun()
+                    st.markdown(" · ".join(_msg_partes))
                 else:
-                    st.caption("_Sin lotes_")
-            with _cols_r[2]:
-                if st.button(
-                    "📅 +7d",
-                    key=f"reco_reprog7_{_r['id']}",
-                    width="stretch",
-                    help="Postergar 7 días",
-                ):
-                    from datetime import timedelta as _td_r
-                    _nf = (_fobj + _td_r(days=7)).isoformat()
-                    db.reprogramar_recordatorio(_r["id"], _nf)
-                    st.rerun()
-            with _cols_r[3]:
-                if st.button(
-                    "✖ Cerrar",
-                    key=f"reco_cancel_{_r['id']}",
-                    width="stretch",
-                    help="Cancelar este recordatorio",
-                ):
-                    db.cancelar_recordatorio(_r["id"])
-                    st.rerun()
-            st.divider()
-            # Saltar el bloque expandido viejo
-            if False:
+                    st.caption("✅ No tenés llamados pendientes.")
 
-                # ─── RESUMEN DEL CONTACTO ANTERIOR ───
-                # Justo arriba de la ficha técnica, mostramos el
-                # último llamado HECHO del mismo cliente — qué se
-                # habló, qué se acordó, qué quedó pendiente. Si
-                # tiene JSON estructurado lo resumimos en bullets;
-                # si no, mostramos el markdown libre.
-                try:
-                    _prev_recos = db.listar_recordatorios_cliente(
-                        _r["cliente_id"],
-                        incluir_completados=True,
+            # ─── Form de nuevo recordatorio ───
+            if st.session_state.get("mostrar_form_recordatorio"):
+                with st.form("form_recordatorio_nuevo"):
+                    st.markdown("##### Nuevo recordatorio de llamado")
+                    _clientes_reco = db.listar_clientes()
+                    _opciones_cli = {
+                        f"{c['nombre']} ({c.get('localidad','')})": c["id"]
+                        for c in _clientes_reco
+                        if (c.get("estado") or "activo") == "activo"
+                    }
+                    _col_r1, _col_r2 = st.columns([2, 1])
+                    _cli_sel = _col_r1.selectbox(
+                        "Cliente",
+                        options=list(_opciones_cli.keys()),
+                        key="reco_cliente_nuevo",
                     )
-                    _prev_hecho = next(
-                        (x for x in _prev_recos
-                         if x.get("estado") == "hecho"
-                         and x.get("id") != _r["id"]),
-                        None,
+                    _fecha_reco = _col_r2.date_input(
+                        "Cuándo llamarlo",
+                        value=datetime.now().date(),
+                        key="reco_fecha_nueva",
                     )
-                except Exception:
-                    _prev_hecho = None
-
-                if _prev_hecho:
-                    _f_prev = (
-                        (_prev_hecho.get("completado_en") or "")[:10]
-                        or _prev_hecho.get("fecha_objetivo", "—")
+                    _motivo_reco = st.text_area(
+                        "Motivo / qué chequear",
+                        placeholder=(
+                            "Ej: chequear consumo del silo, ver cómo "
+                            "anda la adaptación de los terneros, "
+                            "coordinar próxima entrega..."
+                        ),
+                        key="reco_motivo_nuevo",
+                        height=80,
                     )
-                    # Calcular cuántos días pasaron
-                    try:
-                        _f_prev_d = datetime.strptime(
-                            _f_prev, "%Y-%m-%d"
-                        ).date()
-                        _dias_desde = (
-                            datetime.now().date() - _f_prev_d
-                        ).days
-                        _txt_dias = (
-                            f" · hace **{_dias_desde}** día(s)"
-                            if _dias_desde > 0
-                            else " · hoy mismo"
-                        )
-                    except Exception:
-                        _txt_dias = ""
-
-                    # Resumen visual destacado
-                    st.markdown(
-                        f"<div style='background:#fff8e6;"
-                        f"border-left:4px solid #f0ad4e;"
-                        f"padding:10px 14px;border-radius:6px;"
-                        f"margin:8px 0;'>"
-                        f"<b>📋 Último contacto: {_f_prev}</b>"
-                        f"{_txt_dias}"
-                        f"</div>",
-                        unsafe_allow_html=True,
+                    _c_btn1, _c_btn2 = st.columns(2)
+                    _ok_nuevo = _c_btn1.form_submit_button(
+                        "✅ Programar", type="primary", width="stretch",
                     )
-
-                    # Si hay JSON estructurado, sacamos bullets
-                    # útiles. Si no, mostramos el markdown crudo.
-                    _ev_json_raw = (
-                        _prev_hecho.get("evaluacion_json") or ""
+                    _cancel_nuevo = _c_btn2.form_submit_button(
+                        "✖ Cancelar", width="stretch",
                     )
-                    _ev_struct = {}
-                    if _ev_json_raw:
+                    if _ok_nuevo and _cli_sel:
                         try:
-                            import json as _json_prev
-                            _ev_struct = _json_prev.loads(
-                                _ev_json_raw
+                            db.crear_recordatorio_llamada(
+                                cliente_id=_opciones_cli[_cli_sel],
+                                fecha_objetivo=_fecha_reco.isoformat(),
+                                motivo=_motivo_reco or "",
+                                origen="manual",
+                            )
+                            st.success(
+                                f"✅ Llamado programado para "
+                                f"{_fecha_reco.strftime('%d/%m/%Y')}"
+                            )
+                            st.session_state["mostrar_form_recordatorio"] = False
+                            st.rerun()
+                        except Exception as _e:
+                            st.error(f"Error: {_e}")
+                    elif _cancel_nuevo:
+                        st.session_state["mostrar_form_recordatorio"] = False
+                        st.rerun()
+
+            # _form_registrar_ya: removido del dashboard.
+            # Las conversaciones espontáneas ahora se registran desde la
+            # ficha clínica del lote (botón "📝 Registrar nueva consulta").
+            if False:
+                pass
+
+            # ─── Lista de recordatorios pendientes ───
+            if _recos:
+                _hoy_d = datetime.now().date()
+                for _r in _recos:
+                    try:
+                        _fobj = datetime.strptime(
+                            _r["fecha_objetivo"], "%Y-%m-%d"
+                        ).date()
+                    except Exception:
+                        _fobj = _hoy_d
+                    _delta_d = (_fobj - _hoy_d).days
+                    if _delta_d < 0:
+                        _ico_r = "🔴"
+                        _txt_d = f"Atrasado {abs(_delta_d)} día(s)"
+                    elif _delta_d == 0:
+                        _ico_r = "🟡"
+                        _txt_d = "HOY"
+                    elif _delta_d == 1:
+                        _ico_r = "🟢"
+                        _txt_d = "Mañana"
+                    else:
+                        _ico_r = "🟢"
+                        _txt_d = f"En {_delta_d} días"
+
+                    # Etiqueta de origen
+                    _orig = _r.get("origen", "manual")
+                    _ico_orig = (
+                        "✋ Manual"
+                        if _orig == "manual"
+                        else "🤖 Sugerido"
+                    )
+
+                    # ─── Lista compacta ─── un renglón por recordatorio
+                    # con cliente + fecha + motivo + atajos rápidos. El
+                    # trabajo pesado (ficha técnica, evaluación, ver historial
+                    # clínico) se hace desde la ficha del lote.
+                    _cols_r = st.columns([3, 1, 1, 1])
+                    with _cols_r[0]:
+                        _motivo_short = (
+                            (_r.get("motivo", "") or "").strip()
+                        )
+                        if len(_motivo_short) > 140:
+                            _motivo_short = _motivo_short[:137] + "..."
+                        st.markdown(
+                            f"{_ico_r} **{_r['cliente_nombre']}** · "
+                            f"{_fobj.strftime('%d/%m/%Y')} "
+                            f"_({_txt_d})_ · {_ico_orig}"
+                        )
+                        if _motivo_short:
+                            st.caption(f"📝 {_motivo_short}")
+                        if _r.get("cliente_localidad"):
+                            st.caption(
+                                f"📍 {_r['cliente_localidad']}"
+                            )
+
+                    # Atajo: ir directo a la ficha del lote más reciente
+                    # del cliente (donde está la ficha clínica completa)
+                    with _cols_r[1]:
+                        _lotes_cli_r = []
+                        try:
+                            _lotes_cli_r = db.listar_lotes(
+                                cliente_id=_r["cliente_id"], estado="activo",
+                            ) or []
+                        except Exception:
+                            pass
+                        if _lotes_cli_r:
+                            _lt_pri = _lotes_cli_r[0]
+                            if st.button(
+                                "🩺 Ir al lote",
+                                key=f"go_lote_{_r['id']}",
+                                width="stretch",
+                                help=(
+                                    f"Abrir la ficha clínica del lote "
+                                    f"'{_lt_pri.get('identificador','')}' "
+                                    "donde está toda la historia + el "
+                                    "botón para registrar una nueva consulta."
+                                ),
+                            ):
+                                st.session_state["lote_detalle_id"] = (
+                                    _lt_pri["id"]
+                                )
+                                st.query_params["lote_id"] = str(
+                                    _lt_pri["id"]
+                                )
+                                st.rerun()
+                        else:
+                            st.caption("_Sin lotes_")
+                    with _cols_r[2]:
+                        if st.button(
+                            "📅 +7d",
+                            key=f"reco_reprog7_{_r['id']}",
+                            width="stretch",
+                            help="Postergar 7 días",
+                        ):
+                            from datetime import timedelta as _td_r
+                            _nf = (_fobj + _td_r(days=7)).isoformat()
+                            db.reprogramar_recordatorio(_r["id"], _nf)
+                            st.rerun()
+                    with _cols_r[3]:
+                        if st.button(
+                            "✖ Cerrar",
+                            key=f"reco_cancel_{_r['id']}",
+                            width="stretch",
+                            help="Cancelar este recordatorio",
+                        ):
+                            db.cancelar_recordatorio(_r["id"])
+                            st.rerun()
+                    st.divider()
+                    # Saltar el bloque expandido viejo
+                    if False:
+
+                        # ─── RESUMEN DEL CONTACTO ANTERIOR ───
+                        # Justo arriba de la ficha técnica, mostramos el
+                        # último llamado HECHO del mismo cliente — qué se
+                        # habló, qué se acordó, qué quedó pendiente. Si
+                        # tiene JSON estructurado lo resumimos en bullets;
+                        # si no, mostramos el markdown libre.
+                        try:
+                            _prev_recos = db.listar_recordatorios_cliente(
+                                _r["cliente_id"],
+                                incluir_completados=True,
+                            )
+                            _prev_hecho = next(
+                                (x for x in _prev_recos
+                                 if x.get("estado") == "hecho"
+                                 and x.get("id") != _r["id"]),
+                                None,
                             )
                         except Exception:
-                            _ev_struct = {}
+                            _prev_hecho = None
 
-                    if _ev_struct:
-                        # Resumen estructurado
-                        _bullets = []
-                        if _ev_struct.get("tipo_contacto"):
-                            _bullets.append(
-                                f"**Tipo:** "
-                                f"{_ev_struct['tipo_contacto']}"
-                                + (
-                                    f" con "
-                                    f"_{_ev_struct.get('atendio','')}_"
-                                    if _ev_struct.get('atendio')
-                                    else ""
+                        if _prev_hecho:
+                            _f_prev = (
+                                (_prev_hecho.get("completado_en") or "")[:10]
+                                or _prev_hecho.get("fecha_objetivo", "—")
+                            )
+                            # Calcular cuántos días pasaron
+                            try:
+                                _f_prev_d = datetime.strptime(
+                                    _f_prev, "%Y-%m-%d"
+                                ).date()
+                                _dias_desde = (
+                                    datetime.now().date() - _f_prev_d
+                                ).days
+                                _txt_dias = (
+                                    f" · hace **{_dias_desde}** día(s)"
+                                    if _dias_desde > 0
+                                    else " · hoy mismo"
                                 )
-                            )
-                        if _ev_struct.get("resumen_semaforo"):
-                            _bullets.append(
-                                f"**Estado clínico de esa "
-                                f"consulta:** "
-                                f"{_ev_struct['resumen_semaforo']}"
-                            )
-                        if int(_ev_struct.get("bajas_48hs") or 0) > 0:
-                            _bullets.append(
-                                f"💀 **{_ev_struct['bajas_48hs']} "
-                                "muerte(s)** registrada(s)"
-                                + (
-                                    f" — "
-                                    f"{_ev_struct.get('causa_muerte','')}"
-                                    if _ev_struct.get('causa_muerte')
-                                    else ""
-                                )
-                            )
-                        if int(_ev_struct.get("animales_enfermos")
-                               or 0) > 0:
-                            _bullets.append(
-                                f"🤒 **"
-                                f"{_ev_struct['animales_enfermos']}"
-                                " enfermo(s)** en seguimiento"
-                            )
-                        if (
-                            _ev_struct.get("acciones_acordadas")
-                            and _ev_struct["acciones_acordadas"]
-                            .strip()
-                        ):
-                            _bullets.append(
-                                "✅ **Acciones acordadas la "
-                                "vez pasada:**\n"
-                                + _ev_struct["acciones_acordadas"]
-                            )
-                        if (_ev_struct.get("observaciones")
-                                and _ev_struct["observaciones"]
-                                .strip()):
-                            _obs_prev = _ev_struct[
-                                "observaciones"
-                            ][:300]
-                            _bullets.append(
-                                f"📝 **Observaciones:** {_obs_prev}"
-                            )
-                        if _bullets:
-                            for _b in _bullets:
-                                st.markdown(f"- {_b}")
-                        else:
-                            st.caption(
-                                "_(Sin datos relevantes para "
-                                "destacar.)_"
-                            )
+                            except Exception:
+                                _txt_dias = ""
 
-                        # Botón para ver TODO el detalle si lo
-                        # necesita
-                        with st.expander(
-                            "📄 Ver detalle completo del contacto "
-                            "anterior",
-                        ):
+                            # Resumen visual destacado
                             st.markdown(
-                                _prev_hecho.get(
-                                    "notas_cierre", "—",
-                                ) or "—"
-                            )
-                    else:
-                        # Markdown crudo del cierre
-                        _notas_prev = (
-                            _prev_hecho.get("notas_cierre", "")
-                            or ""
-                        )
-                        if _notas_prev.strip():
-                            st.markdown(_notas_prev[:1500])
-                            if len(_notas_prev) > 1500:
-                                st.caption("_(truncado)_")
-                        else:
-                            st.caption(
-                                "_(El contacto anterior no quedó "
-                                "registrado con detalle.)_"
-                            )
-                else:
-                    st.caption(
-                        "🆕 Es la primera vez que llamás a este "
-                        "cliente — sin contactos previos registrados."
-                    )
-
-                # ─── FICHA TÉCNICA DE REVISIÓN ───
-                # Snapshot del cliente armado en tiempo real para
-                # que tengas todo a mano antes de marcar.
-                with st.expander(
-                    "📋 Ficha técnica para la llamada — "
-                    "lotes, dieta, stock, alertas",
-                    expanded=False,
-                ):
-                    try:
-                        _ficha = db.armar_ficha_revision_cliente(
-                            _r["cliente_id"]
-                        )
-                    except Exception as _eficha:
-                        _ficha = None
-                        st.warning(
-                            f"No pude armar la ficha: {_eficha}"
-                        )
-
-                    if _ficha:
-                        # Cabecera cliente
-                        _cli_f = _ficha.get("cliente", {})
-                        _cts_f = _cli_f.get("contactos", []) or []
-                        st.markdown(
-                            f"**{_cli_f.get('nombre','')}** · "
-                            f"📍 {_cli_f.get('localidad','—')}"
-                        )
-                        if _cts_f:
-                            _lineas_cts = []
-                            for _ct in _cts_f[:3]:
-                                _nm = _ct.get('nombre') or '—'
-                                _wa = _ct.get('whatsapp') or ''
-                                _em = _ct.get('email') or ''
-                                _parts = [f"👤 {_nm}"]
-                                if _wa:
-                                    _parts.append(f"📱 {_wa}")
-                                if _em:
-                                    _parts.append(f"✉️ {_em}")
-                                _lineas_cts.append(
-                                    " · ".join(_parts)
-                                )
-                            st.markdown(
-                                "<br>".join(_lineas_cts),
+                                f"<div style='background:#fff8e6;"
+                                f"border-left:4px solid #f0ad4e;"
+                                f"padding:10px 14px;border-radius:6px;"
+                                f"margin:8px 0;'>"
+                                f"<b>📋 Último contacto: {_f_prev}</b>"
+                                f"{_txt_dias}"
+                                f"</div>",
                                 unsafe_allow_html=True,
                             )
 
-                        # Último contacto
-                        _uc = _ficha.get("ultimo_contacto")
-                        if _uc:
-                            _f_uc = (
-                                (_uc.get('completado_en') or '')[:10]
-                                or _uc.get('fecha_objetivo', '—')
+                            # Si hay JSON estructurado, sacamos bullets
+                            # útiles. Si no, mostramos el markdown crudo.
+                            _ev_json_raw = (
+                                _prev_hecho.get("evaluacion_json") or ""
                             )
-                            st.caption(
-                                f"📅 Último llamado completado: "
-                                f"**{_f_uc}**"
-                            )
-                            _notas_prev = _uc.get(
-                                "notas_cierre", ""
-                            ) or ""
-                            if _notas_prev:
-                                with st.expander(
-                                    "Ver notas del último llamado"
+                            _ev_struct = {}
+                            if _ev_json_raw:
+                                try:
+                                    import json as _json_prev
+                                    _ev_struct = _json_prev.loads(
+                                        _ev_json_raw
+                                    )
+                                except Exception:
+                                    _ev_struct = {}
+
+                            if _ev_struct:
+                                # Resumen estructurado
+                                _bullets = []
+                                if _ev_struct.get("tipo_contacto"):
+                                    _bullets.append(
+                                        f"**Tipo:** "
+                                        f"{_ev_struct['tipo_contacto']}"
+                                        + (
+                                            f" con "
+                                            f"_{_ev_struct.get('atendio','')}_"
+                                            if _ev_struct.get('atendio')
+                                            else ""
+                                        )
+                                    )
+                                if _ev_struct.get("resumen_semaforo"):
+                                    _bullets.append(
+                                        f"**Estado clínico de esa "
+                                        f"consulta:** "
+                                        f"{_ev_struct['resumen_semaforo']}"
+                                    )
+                                if int(_ev_struct.get("bajas_48hs") or 0) > 0:
+                                    _bullets.append(
+                                        f"💀 **{_ev_struct['bajas_48hs']} "
+                                        "muerte(s)** registrada(s)"
+                                        + (
+                                            f" — "
+                                            f"{_ev_struct.get('causa_muerte','')}"
+                                            if _ev_struct.get('causa_muerte')
+                                            else ""
+                                        )
+                                    )
+                                if int(_ev_struct.get("animales_enfermos")
+                                       or 0) > 0:
+                                    _bullets.append(
+                                        f"🤒 **"
+                                        f"{_ev_struct['animales_enfermos']}"
+                                        " enfermo(s)** en seguimiento"
+                                    )
+                                if (
+                                    _ev_struct.get("acciones_acordadas")
+                                    and _ev_struct["acciones_acordadas"]
+                                    .strip()
                                 ):
-                                    st.markdown(_notas_prev)
+                                    _bullets.append(
+                                        "✅ **Acciones acordadas la "
+                                        "vez pasada:**\n"
+                                        + _ev_struct["acciones_acordadas"]
+                                    )
+                                if (_ev_struct.get("observaciones")
+                                        and _ev_struct["observaciones"]
+                                        .strip()):
+                                    _obs_prev = _ev_struct[
+                                        "observaciones"
+                                    ][:300]
+                                    _bullets.append(
+                                        f"📝 **Observaciones:** {_obs_prev}"
+                                    )
+                                if _bullets:
+                                    for _b in _bullets:
+                                        st.markdown(f"- {_b}")
+                                else:
+                                    st.caption(
+                                        "_(Sin datos relevantes para "
+                                        "destacar.)_"
+                                    )
+
+                                # Botón para ver TODO el detalle si lo
+                                # necesita
+                                with st.expander(
+                                    "📄 Ver detalle completo del contacto "
+                                    "anterior",
+                                ):
+                                    st.markdown(
+                                        _prev_hecho.get(
+                                            "notas_cierre", "—",
+                                        ) or "—"
+                                    )
+                            else:
+                                # Markdown crudo del cierre
+                                _notas_prev = (
+                                    _prev_hecho.get("notas_cierre", "")
+                                    or ""
+                                )
+                                if _notas_prev.strip():
+                                    st.markdown(_notas_prev[:1500])
+                                    if len(_notas_prev) > 1500:
+                                        st.caption("_(truncado)_")
+                                else:
+                                    st.caption(
+                                        "_(El contacto anterior no quedó "
+                                        "registrado con detalle.)_"
+                                    )
                         else:
                             st.caption(
-                                "📅 Sin llamados previos registrados"
+                                "🆕 Es la primera vez que llamás a este "
+                                "cliente — sin contactos previos registrados."
                             )
 
-                        # Lotes activos
-                        _lotes_f = _ficha.get("lotes", []) or []
-                        if _lotes_f:
-                            st.markdown("##### 🐂 Lotes activos")
-                            for _lt_f in _lotes_f:
-                                _bullet = (
-                                    f"**{_lt_f['identificador']}** · "
-                                    f"{_lt_f.get('categoria','—')} "
-                                    f"{_lt_f.get('raza','')} · "
-                                    f"{_lt_f.get('cantidad','—')} cab · "
-                                    f"{_lt_f['dias']}d en sistema · "
-                                    f"PV ingreso "
-                                    f"{_lt_f['pv_ingreso_kg']:.0f} kg "
-                                    f"→ HOY "
-                                    f"**{_lt_f['pv_hoy_kg']:.0f} kg** "
-                                    f"(ADG {_lt_f['adg_obj']:.2f})"
+                        # ─── FICHA TÉCNICA DE REVISIÓN ───
+                        # Snapshot del cliente armado en tiempo real para
+                        # que tengas todo a mano antes de marcar.
+                        with st.expander(
+                            "📋 Ficha técnica para la llamada — "
+                            "lotes, dieta, stock, alertas",
+                            expanded=False,
+                        ):
+                            try:
+                                _ficha = db.armar_ficha_revision_cliente(
+                                    _r["cliente_id"]
                                 )
-                                st.markdown(f"- {_bullet}")
-                                _d_v = _lt_f.get("dieta_vigente")
-                                if _d_v:
-                                    _obs_v = (
-                                        _d_v.get('observaciones', '')
-                                        or ''
-                                    )
-                                    # KPIs nutricionales
+                            except Exception as _eficha:
+                                _ficha = None
+                                st.warning(
+                                    f"No pude armar la ficha: {_eficha}"
+                                )
+
+                            if _ficha:
+                                # Cabecera cliente
+                                _cli_f = _ficha.get("cliente", {})
+                                _cts_f = _cli_f.get("contactos", []) or []
+                                st.markdown(
+                                    f"**{_cli_f.get('nombre','')}** · "
+                                    f"📍 {_cli_f.get('localidad','—')}"
+                                )
+                                if _cts_f:
+                                    _lineas_cts = []
+                                    for _ct in _cts_f[:3]:
+                                        _nm = _ct.get('nombre') or '—'
+                                        _wa = _ct.get('whatsapp') or ''
+                                        _em = _ct.get('email') or ''
+                                        _parts = [f"👤 {_nm}"]
+                                        if _wa:
+                                            _parts.append(f"📱 {_wa}")
+                                        if _em:
+                                            _parts.append(f"✉️ {_em}")
+                                        _lineas_cts.append(
+                                            " · ".join(_parts)
+                                        )
                                     st.markdown(
-                                        f"  - 🍽️ **Dieta vigente** "
-                                        f"({_d_v.get('fecha','—')[:10]}): "
-                                        f"PB {_d_v.get('pb_pct',0):.1f}% · "
-                                        f"DMI "
-                                        f"{_d_v.get('consumo_ms_kg',0):.2f} "
-                                        f"kg MS/día · "
-                                        f"EM {_d_v.get('em_mcal_dia',0):.1f} "
-                                        f"Mcal/día"
+                                        "<br>".join(_lineas_cts),
+                                        unsafe_allow_html=True,
                                     )
-                                    if obs := _obs_v.strip():
-                                        st.markdown(
-                                            f"  - _{obs[:200]}_"
+
+                                # Último contacto
+                                _uc = _ficha.get("ultimo_contacto")
+                                if _uc:
+                                    _f_uc = (
+                                        (_uc.get('completado_en') or '')[:10]
+                                        or _uc.get('fecha_objetivo', '—')
+                                    )
+                                    st.caption(
+                                        f"📅 Último llamado completado: "
+                                        f"**{_f_uc}**"
+                                    )
+                                    _notas_prev = _uc.get(
+                                        "notas_cierre", ""
+                                    ) or ""
+                                    if _notas_prev:
+                                        with st.expander(
+                                            "Ver notas del último llamado"
+                                        ):
+                                            st.markdown(_notas_prev)
+                                else:
+                                    st.caption(
+                                        "📅 Sin llamados previos registrados"
+                                    )
+
+                                # Lotes activos
+                                _lotes_f = _ficha.get("lotes", []) or []
+                                if _lotes_f:
+                                    st.markdown("##### 🐂 Lotes activos")
+                                    for _lt_f in _lotes_f:
+                                        _bullet = (
+                                            f"**{_lt_f['identificador']}** · "
+                                            f"{_lt_f.get('categoria','—')} "
+                                            f"{_lt_f.get('raza','')} · "
+                                            f"{_lt_f.get('cantidad','—')} cab · "
+                                            f"{_lt_f['dias']}d en sistema · "
+                                            f"PV ingreso "
+                                            f"{_lt_f['pv_ingreso_kg']:.0f} kg "
+                                            f"→ HOY "
+                                            f"**{_lt_f['pv_hoy_kg']:.0f} kg** "
+                                            f"(ADG {_lt_f['adg_obj']:.2f})"
                                         )
-                                    # Composición ingrediente por ingrediente
-                                    _comp_v = _d_v.get(
-                                        "composicion", []
-                                    ) or []
-                                    if _comp_v:
-                                        _cant_lote_ff = int(
-                                            _lt_f.get("cantidad", 0)
-                                            or 0
-                                        )
-                                        _filas_form = []
-                                        _total_kg_an = 0.0
-                                        _total_pct = 0.0
-                                        for _ing in _comp_v:
-                                            _kg_tc_ing = float(
-                                                _ing.get(
-                                                    "kg_tal_cual", 0,
-                                                ) or 0
+                                        st.markdown(f"- {_bullet}")
+                                        _d_v = _lt_f.get("dieta_vigente")
+                                        if _d_v:
+                                            _obs_v = (
+                                                _d_v.get('observaciones', '')
+                                                or ''
                                             )
-                                            _pct_r_ing = float(
-                                                _ing.get(
-                                                    "pct_racion", 0,
-                                                ) or 0
-                                            )
-                                            _total_kg_an += _kg_tc_ing
-                                            _total_pct += _pct_r_ing
-                                            _filas_form.append({
-                                                "Ingrediente": (
-                                                    _ing.get(
-                                                        "nombre", "?",
-                                                    )
-                                                ),
-                                                "% ración": (
-                                                    f"{_pct_r_ing:.1f}%"
-                                                ),
-                                                "kg/an/día": round(
-                                                    _kg_tc_ing, 2,
-                                                ),
-                                                "kg/lote/día": round(
-                                                    _kg_tc_ing
-                                                    * _cant_lote_ff, 1,
-                                                ),
-                                            })
-                                        # Fila total
-                                        _filas_form.append({
-                                            "Ingrediente": "TOTAL",
-                                            "% ración": (
-                                                f"{_total_pct:.0f}%"
-                                            ),
-                                            "kg/an/día": round(
-                                                _total_kg_an, 2,
-                                            ),
-                                            "kg/lote/día": round(
-                                                _total_kg_an
-                                                * _cant_lote_ff, 1,
-                                            ),
-                                        })
-                                        _comp_from = (
-                                            _d_v.get(
-                                                "composicion_origen_fecha",
-                                                ""
-                                            ) or ""
-                                        )
-                                        if _comp_from:
+                                            # KPIs nutricionales
                                             st.markdown(
-                                                f"  - **📋 Fórmula** "
-                                                f"({_cant_lote_ff} "
-                                                f"animales) — "
-                                                f"_composición tomada "
-                                                f"de la dieta del "
-                                                f"{_comp_from[:10]} "
-                                                f"(la vigente solo "
-                                                f"tenía KPIs)_:"
+                                                f"  - 🍽️ **Dieta vigente** "
+                                                f"({_d_v.get('fecha','—')[:10]}): "
+                                                f"PB {_d_v.get('pb_pct',0):.1f}% · "
+                                                f"DMI "
+                                                f"{_d_v.get('consumo_ms_kg',0):.2f} "
+                                                f"kg MS/día · "
+                                                f"EM {_d_v.get('em_mcal_dia',0):.1f} "
+                                                f"Mcal/día"
                                             )
+                                            if obs := _obs_v.strip():
+                                                st.markdown(
+                                                    f"  - _{obs[:200]}_"
+                                                )
+                                            # Composición ingrediente por ingrediente
+                                            _comp_v = _d_v.get(
+                                                "composicion", []
+                                            ) or []
+                                            if _comp_v:
+                                                _cant_lote_ff = int(
+                                                    _lt_f.get("cantidad", 0)
+                                                    or 0
+                                                )
+                                                _filas_form = []
+                                                _total_kg_an = 0.0
+                                                _total_pct = 0.0
+                                                for _ing in _comp_v:
+                                                    _kg_tc_ing = float(
+                                                        _ing.get(
+                                                            "kg_tal_cual", 0,
+                                                        ) or 0
+                                                    )
+                                                    _pct_r_ing = float(
+                                                        _ing.get(
+                                                            "pct_racion", 0,
+                                                        ) or 0
+                                                    )
+                                                    _total_kg_an += _kg_tc_ing
+                                                    _total_pct += _pct_r_ing
+                                                    _filas_form.append({
+                                                        "Ingrediente": (
+                                                            _ing.get(
+                                                                "nombre", "?",
+                                                            )
+                                                        ),
+                                                        "% ración": (
+                                                            f"{_pct_r_ing:.1f}%"
+                                                        ),
+                                                        "kg/an/día": round(
+                                                            _kg_tc_ing, 2,
+                                                        ),
+                                                        "kg/lote/día": round(
+                                                            _kg_tc_ing
+                                                            * _cant_lote_ff, 1,
+                                                        ),
+                                                    })
+                                                # Fila total
+                                                _filas_form.append({
+                                                    "Ingrediente": "TOTAL",
+                                                    "% ración": (
+                                                        f"{_total_pct:.0f}%"
+                                                    ),
+                                                    "kg/an/día": round(
+                                                        _total_kg_an, 2,
+                                                    ),
+                                                    "kg/lote/día": round(
+                                                        _total_kg_an
+                                                        * _cant_lote_ff, 1,
+                                                    ),
+                                                })
+                                                _comp_from = (
+                                                    _d_v.get(
+                                                        "composicion_origen_fecha",
+                                                        ""
+                                                    ) or ""
+                                                )
+                                                if _comp_from:
+                                                    st.markdown(
+                                                        f"  - **📋 Fórmula** "
+                                                        f"({_cant_lote_ff} "
+                                                        f"animales) — "
+                                                        f"_composición tomada "
+                                                        f"de la dieta del "
+                                                        f"{_comp_from[:10]} "
+                                                        f"(la vigente solo "
+                                                        f"tenía KPIs)_:"
+                                                    )
+                                                else:
+                                                    st.markdown(
+                                                        f"  - **📋 Fórmula vigente** "
+                                                        f"({_cant_lote_ff} animales):"
+                                                    )
+                                                st.dataframe(
+                                                    pd.DataFrame(_filas_form),
+                                                    hide_index=True,
+                                                    width="stretch",
+                                                )
+                                            else:
+                                                st.markdown(
+                                                    "  - ⚠️ Esta dieta no "
+                                                    "tiene composición "
+                                                    "detallada cargada — "
+                                                    "solo se guardaron los "
+                                                    "KPIs globales. Para ver "
+                                                    "ingredientes, hay que "
+                                                    "re-formularla con el "
+                                                    "Asesor IA."
+                                                )
                                         else:
                                             st.markdown(
-                                                f"  - **📋 Fórmula vigente** "
-                                                f"({_cant_lote_ff} animales):"
+                                                "  - ⚠️ Sin dieta cargada "
+                                                "en el historial del lote"
                                             )
-                                        st.dataframe(
-                                            pd.DataFrame(_filas_form),
-                                            hide_index=True,
-                                            width="stretch",
-                                        )
-                                    else:
+
+                                # Alertas recientes
+                                _als_f = _ficha.get(
+                                    "alertas_recientes", []
+                                ) or []
+                                if _als_f:
+                                    st.markdown("##### 🌦️ Alertas recientes")
+                                    for _a_f in _als_f:
                                         st.markdown(
-                                            "  - ⚠️ Esta dieta no "
-                                            "tiene composición "
-                                            "detallada cargada — "
-                                            "solo se guardaron los "
-                                            "KPIs globales. Para ver "
-                                            "ingredientes, hay que "
-                                            "re-formularla con el "
-                                            "Asesor IA."
+                                            f"- {_a_f.get('fecha','—')[:10]} "
+                                            f"· {_a_f.get('tipo','—')} "
+                                            f"· {(_a_f.get('asunto','') or '')[:60]}"
                                         )
-                                else:
+
+                                # Puntos a chequear sugeridos
+                                _pts_f = _ficha.get("puntos_chequeo", []) or []
+                                if _pts_f:
                                     st.markdown(
-                                        "  - ⚠️ Sin dieta cargada "
-                                        "en el historial del lote"
+                                        "##### ✅ Puntos sugeridos a chequear"
                                     )
+                                    for _p in _pts_f:
+                                        st.markdown(f"- {_p}")
 
-                        # Alertas recientes
-                        _als_f = _ficha.get(
-                            "alertas_recientes", []
-                        ) or []
-                        if _als_f:
-                            st.markdown("##### 🌦️ Alertas recientes")
-                            for _a_f in _als_f:
-                                st.markdown(
-                                    f"- {_a_f.get('fecha','—')[:10]} "
-                                    f"· {_a_f.get('tipo','—')} "
-                                    f"· {(_a_f.get('asunto','') or '')[:60]}"
-                                )
+                        # Botones de acción
+                        _bcols = st.columns([2, 1, 1, 1])
+                        if _bcols[0].button(
+                            "📝 Registrar lo conversado",
+                            key=f"reco_hecho_{_r['id']}",
+                            width="stretch",
+                            type="primary",
+                            help=(
+                                "Anotar el resultado de la llamada / "
+                                "WhatsApp con el cliente. Marca este "
+                                "recordatorio como completado."
+                            ),
+                        ):
+                            st.session_state[
+                                f"reco_cerrar_{_r['id']}"
+                            ] = True
+                            st.rerun()
 
-                        # Puntos a chequear sugeridos
-                        _pts_f = _ficha.get("puntos_chequeo", []) or []
-                        if _pts_f:
-                            st.markdown(
-                                "##### ✅ Puntos sugeridos a chequear"
+                        if _bcols[1].button(
+                            "📅 +7 días",
+                            key=f"reco_reprog7_{_r['id']}",
+                            width="stretch",
+                            help=(
+                                "Postergar el recordatorio 7 días "
+                                "(útil si quedaste sin tiempo de "
+                                "llamarlo)"
+                            ),
+                        ):
+                            from datetime import timedelta as _td_r
+                            _nf = (_fobj + _td_r(days=7)).isoformat()
+                            db.reprogramar_recordatorio(_r["id"], _nf)
+                            st.rerun()
+
+                        if _bcols[2].button(
+                            "✖ Cancelar",
+                            key=f"reco_cancel_{_r['id']}",
+                            width="stretch",
+                            help=(
+                                "Descartar este recordatorio "
+                                "(no es necesario llamar)"
+                            ),
+                        ):
+                            db.cancelar_recordatorio(_r["id"])
+                            st.rerun()
+
+                        # ─── Form de EVALUACIÓN ESTRUCTURADA DEL LOTE ───
+                        # Ya no es solo "resumen libre" — es un cuestionario
+                        # técnico que el asesor llena durante/después de la
+                        # conversación. Al guardar, el sistema CRUZA las
+                        # respuestas con la dieta vigente del lote y SUGIERE
+                        # acciones concretas. Todo queda en notas_cierre como
+                        # markdown estructurado.
+                        if st.session_state.get(
+                            f"reco_cerrar_{_r['id']}"
+                        ):
+                            from src import evaluacion_lote as ev
+                            _renderizar_form_evaluacion(
+                                recordatorio_id=_r["id"],
+                                cliente_id=_r["cliente_id"],
+                                cliente_nombre=_r.get(
+                                    "cliente_nombre", ""
+                                ),
+                                ev_mod=ev,
+                                on_close_state=f"reco_cerrar_{_r['id']}",
                             )
-                            for _p in _pts_f:
-                                st.markdown(f"- {_p}")
 
-                # Botones de acción
-                _bcols = st.columns([2, 1, 1, 1])
-                if _bcols[0].button(
-                    "📝 Registrar lo conversado",
-                    key=f"reco_hecho_{_r['id']}",
-                    width="stretch",
-                    type="primary",
-                    help=(
-                        "Anotar el resultado de la llamada / "
-                        "WhatsApp con el cliente. Marca este "
-                        "recordatorio como completado."
-                    ),
-                ):
-                    st.session_state[
-                        f"reco_cerrar_{_r['id']}"
-                    ] = True
-                    st.rerun()
-
-                if _bcols[1].button(
-                    "📅 +7 días",
-                    key=f"reco_reprog7_{_r['id']}",
-                    width="stretch",
-                    help=(
-                        "Postergar el recordatorio 7 días "
-                        "(útil si quedaste sin tiempo de "
-                        "llamarlo)"
-                    ),
-                ):
-                    from datetime import timedelta as _td_r
-                    _nf = (_fobj + _td_r(days=7)).isoformat()
-                    db.reprogramar_recordatorio(_r["id"], _nf)
-                    st.rerun()
-
-                if _bcols[2].button(
-                    "✖ Cancelar",
-                    key=f"reco_cancel_{_r['id']}",
-                    width="stretch",
-                    help=(
-                        "Descartar este recordatorio "
-                        "(no es necesario llamar)"
-                    ),
-                ):
-                    db.cancelar_recordatorio(_r["id"])
-                    st.rerun()
-
-                # ─── Form de EVALUACIÓN ESTRUCTURADA DEL LOTE ───
-                # Ya no es solo "resumen libre" — es un cuestionario
-                # técnico que el asesor llena durante/después de la
-                # conversación. Al guardar, el sistema CRUZA las
-                # respuestas con la dieta vigente del lote y SUGIERE
-                # acciones concretas. Todo queda en notas_cierre como
-                # markdown estructurado.
-                if st.session_state.get(
-                    f"reco_cerrar_{_r['id']}"
-                ):
-                    from src import evaluacion_lote as ev
-                    _renderizar_form_evaluacion(
-                        recordatorio_id=_r["id"],
-                        cliente_id=_r["cliente_id"],
-                        cliente_nombre=_r.get(
-                            "cliente_nombre", ""
-                        ),
-                        ev_mod=ev,
-                        on_close_state=f"reco_cerrar_{_r['id']}",
-                    )
-
-    st.divider()
 
     # Alertas climáticas globales — detalladas por localidad
-    st.markdown("### 🌦️ Clima y alertas por localidad")
-    with st.spinner("Consultando clima de tus clientes..."):
-        try:
-            datos_clima = dashboard.obtener_alertas_clima_globales()
-        except Exception as e:
-            datos_clima = {"consultadas": [], "sin_localidad": [],
-                           "n_total_clientes": 0, "n_con_alertas": 0,
-                           "error": str(e)}
+    with _cont_clima_det:
+        with st.spinner("Consultando clima de tus clientes..."):
+            try:
+                datos_clima = dashboard.obtener_alertas_clima_globales()
+            except Exception as e:
+                datos_clima = {"consultadas": [], "sin_localidad": [],
+                               "n_total_clientes": 0, "n_con_alertas": 0,
+                               "error": str(e)}
 
-    n_consultadas = len(datos_clima["consultadas"])
-    n_sin_loc = len(datos_clima["sin_localidad"])
-    n_con_alertas = datos_clima["n_con_alertas"]
+        n_consultadas = len(datos_clima["consultadas"])
+        n_sin_loc = len(datos_clima["sin_localidad"])
+        n_con_alertas = datos_clima["n_con_alertas"]
 
-    if n_consultadas == 0 and n_sin_loc == 0:
-        st.info(
-            "No hay clientes cargados aún. Cargá clientes en "
-            "**🏢 Clientes/Lotes** y poneles localidad para que el sistema "
-            "consulte el clima automáticamente."
-        )
-    else:
-        # Resumen rápido
-        st.caption(
-            f"Consulté **{n_consultadas} localidad(es)** · "
-            f"**{n_con_alertas} con alertas** · "
-            f"**{n_sin_loc} cliente(s) sin localidad cargada**"
-        )
-
-        if n_con_alertas == 0 and n_consultadas > 0:
-            st.success(
-                f"✅ Sin alertas climáticas críticas en las "
-                f"{n_consultadas} localidad(es) consultada(s) "
-                f"en los próximos 7 días."
+        if n_consultadas == 0 and n_sin_loc == 0:
+            st.info(
+                "No hay clientes cargados aún. Cargá clientes en "
+                "**🏢 Clientes/Lotes** y poneles localidad para que el sistema "
+                "consulte el clima automáticamente."
             )
-
-        # Detalle por localidad
-        for info in datos_clima["consultadas"]:
-            estado = info["estado"]
-            cliente = info["cliente"]
-            loc = info["localidad"]
-
-            if estado == "sin_geocodificar":
-                with st.warning(
-                    f"⚠️ **{cliente}** — '{loc}': no pude geocodificar la "
-                    "localidad. Probá con un nombre más específico "
-                    "(ej. 'La Carlota, Córdoba')."
-                ):
-                    pass
-                continue
-
-            if estado in ("sin_clima", "error"):
-                msj = info.get("error", "Sin datos disponibles")
-                st.warning(
-                    f"⚠️ **{cliente}** — {loc}: {msj}"
-                )
-                continue
-
-            # Estado OK — mostrar info climática
-            n_crit = info["n_alertas_criticas"]
-            n_warn = info["n_alertas_warning"]
-
-            # Severidad REAL máxima (HOY + futuro), considerando
-            # viento + lluvia + HR + acumulación. Esto puede subir el
-            # nivel del semáforo más allá de lo que dice solo el THI
-            # clásico — por ej. mañana fría con viento y lluvia que
-            # el THI marca como "sin estrés" pero el bovino siente.
-            _sev_real_max = info.get(
-                "severidad_real_max", "🟢 Sin estrés"
-            )
-            _sev_rank_real = info.get("severidad_real_max_rank", 1)
-
-            # Combinar: el color/ícono del título es el peor entre
-            # las alertas predictivas y la severidad real.
-            if n_crit > 0 or _sev_rank_real >= 4:
-                titulo_color = "🔴"
-                box_func = st.error
-            elif n_warn > 0 or _sev_rank_real == 3:
-                titulo_color = "🟠"
-                box_func = st.warning
-            elif _sev_rank_real == 2:
-                titulo_color = "🟡"
-                box_func = st.warning
-            else:
-                titulo_color = "🟢"
-                box_func = st.success
-
-            # Etiqueta del título: mostrar HOY explícito y, si el
-            # peor día de la semana es PEOR que hoy, agregar
-            # "→ peor DD/MM: ..." para que se entienda por qué el
-            # semáforo del título no coincide con el de hoy.
-            _sev_real_hoy = info.get(
-                "severidad_real_hoy", "🟢 Sin estrés"
-            )
-            _sev_rank_hoy = _sev_rank_real if _sev_real_hoy == _sev_real_max else None
-            _fecha_peor = info.get("severidad_real_max_fecha")
-            _tramo_peor = info.get("severidad_real_max_tramo")
-
-            # Helper rápido para sacar el rank de la sev de hoy
-            _rk = {"🔴": 4, "🟠": 3, "🟡": 2, "🟢": 1}
-            _rank_hoy = _rk.get(
-                (_sev_real_hoy[0] if _sev_real_hoy else "🟢"), 1
-            )
-
-            _label_estado = f"HOY {_sev_real_hoy}"
-            # Si el peor de la semana es distinto/peor que hoy,
-            # explicitar el día.
-            if _sev_rank_real > _rank_hoy and _fecha_peor:
-                # Formato dd/mm para que se lea rápido
-                try:
-                    _fp = datetime.strptime(
-                        _fecha_peor, "%Y-%m-%d"
-                    ).strftime("%d/%m")
-                except Exception:
-                    _fp = _fecha_peor
-                _label_estado += (
-                    f" → peor {_fp}: {_sev_real_max}"
-                )
-
-            # Si el COLOR del título es más severo que la
-            # severidad climática real (es decir, lo dispararon
-            # las alertas predictivas por categoría/lotes), agregar
-            # al título un sufijo que aclare la causa. Así no
-            # parece arbitrario que el círculo sea naranja cuando
-            # el clima de HOY dice atención (amarillo).
-            _color_title_rank = _rk.get(titulo_color, 1)
-            _sufijo_lotes = ""
-            if _color_title_rank > _sev_rank_real and (
-                n_crit > 0 or n_warn > 0
-            ):
-                # Detectar categorías afectadas para mostrar
-                _cats_afectadas = []
-                for _g in info.get("alertas_lotes", []) or []:
-                    _c = _g.get("categoria", "") or ""
-                    if _c and _c not in _cats_afectadas:
-                        _cats_afectadas.append(_c)
-                _cats_str = (
-                    ", ".join(_cats_afectadas[:2])
-                    if _cats_afectadas else "lotes vulnerables"
-                )
-                _total_alertas = n_crit + n_warn
-                _sufijo_lotes = (
-                    f" · 🚨 {_total_alertas} "
-                    f"alerta(s) por {_cats_str}"
-                )
-
+        else:
             with st.expander(
-                f"{titulo_color} **{cliente}** — {loc} · "
-                f"{info['temp_c']:.0f}°C · "
-                f"THI {info['thi']:.0f} · {_label_estado}"
-                f"{_sufijo_lotes}",
+                f"🌤️ Clima detallado por localidad "
+                f"({n_consultadas} consultada(s) · "
+                f"{n_con_alertas} con alerta(s))",
                 expanded=False,
             ):
-                # Línea compacta de datos climáticos + ubicación, en
-                # vez de 4 métricas grandes que ocupan mucho vertical.
-                _ubic_html = ""
-                if "nombre_geocode" in info:
-                    _ubic_html = (
-                        f" · 📍 {info['nombre_geocode']} "
-                        f"<span style='color:#999;font-size:0.85em;'>"
-                        f"({info['lat']:.2f}, {info['lon']:.2f})</span>"
-                    )
-                st.markdown(
-                    f"<div style='font-size:0.95em;color:#444;"
-                    f"margin-bottom:8px;'>"
-                    f"🌡️ <b>{info['temp_c']:.0f}°C</b> · "
-                    f"💧 <b>{info['humedad_pct']:.0f}%</b> · "
-                    f"📊 THI <b>{info['thi']:.0f}</b> "
-                    f"({info['thi_estado']})"
-                    f"{_ubic_html}"
-                    f"</div>",
-                    unsafe_allow_html=True,
+                # Resumen rápido
+                st.caption(
+                    f"Consulté **{n_consultadas} localidad(es)** · "
+                    f"**{n_con_alertas} con alertas** · "
+                    f"**{n_sin_loc} cliente(s) sin localidad cargada**"
                 )
 
-                # Pronóstico de 7 días — siempre visible para tener
-                # el clima por delante en cada cliente.
-                _pron = info.get("pronostico_7d") or []
-                if _pron:
-                    _filas_pron = []
-                    for d in _pron:
-                        _thi_d = d.get("thi")
-                        _estado_d = d.get("thi_estado", "—") or "—"
-                        _filas_pron.append({
-                            "Tramo": d.get("tramo", "—"),
-                            "Fecha": d.get("fecha", "—"),
-                            "T° min": (
-                                f"{d['t_min']:.0f}°C"
-                                if d.get("t_min") is not None
-                                else "—"
-                            ),
-                            "T° máx": (
-                                f"{d['t_max']:.0f}°C"
-                                if d.get("t_max") is not None
-                                else "—"
-                            ),
-                            "HR": (
-                                f"{d['hr_media']:.0f}%"
-                                if d.get("hr_media") is not None
-                                else "—"
-                            ),
-                            "Lluvia": (
-                                f"{d['precipitacion_mm']:.1f} mm"
-                                if d.get("precipitacion_mm") not in
-                                (None, 0) else (
-                                    "—"
-                                    if d.get("precipitacion_mm") is None
-                                    else "0 mm"
-                                )
-                            ),
-                            "Viento máx": (
-                                f"{d['viento_max_kmh']:.0f} km/h"
-                                if d.get("viento_max_kmh") is not None
-                                else "—"
-                            ),
-                            "Cielo": (
-                                # Convertir % nubes a un icono
-                                # rápido de leer
-                                (
-                                    "☀️ Despejado"
-                                    if (d.get("nubes_pct") or 0) < 30
-                                    else (
-                                        "⛅ Parcial"
-                                        if (d.get("nubes_pct") or 0) < 70
-                                        else "☁️ Cubierto"
-                                    )
-                                ) + f" ({d['nubes_pct']:.0f}%)"
-                                if d.get("nubes_pct") is not None
-                                else "—"
-                            ),
-                            "THI": (
-                                f"{_thi_d:.0f}"
-                                if _thi_d is not None else "—"
-                            ),
-                            "Estado (THI)": _estado_d,
-                            "Severidad real": d.get(
-                                "severidad_real", "—",
-                            ),
-                        })
-                    st.markdown(
-                        "<div style='font-size:0.85em;color:#666;"
-                        "margin-top:6px;margin-bottom:4px;'>"
-                        "<b>Clima 14 días</b> (7 pasados + HOY "
-                        "+ 7 futuros) · "
-                        "<i>THI = índice clásico (T°máx + HR media). "
-                        "Severidad real = THI ajustado por viento "
-                        "(Mader 2006) + frío con wind chill bovino "
-                        "+ barro por lluvia + falta de secado por "
-                        "cielo cubierto sostenido.</i>"
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
-                    st.dataframe(
-                        pd.DataFrame(_filas_pron),
-                        hide_index=True, width="stretch",
+                if n_con_alertas == 0 and n_consultadas > 0:
+                    st.success(
+                        f"✅ Sin alertas climáticas críticas en las "
+                        f"{n_consultadas} localidad(es) consultada(s) "
+                        f"en los próximos 7 días."
                     )
 
-                if not info["alertas_lotes"]:
-                    st.caption(
-                        f"✅ Sin alertas para los lotes activos en "
-                        f"los próximos 7 días."
+                # Detalle por localidad
+                for info in datos_clima["consultadas"]:
+                    estado = info["estado"]
+                    cliente = info["cliente"]
+                    loc = info["localidad"]
+
+                    if estado == "sin_geocodificar":
+                        with st.warning(
+                            f"⚠️ **{cliente}** — '{loc}': no pude geocodificar la "
+                            "localidad. Probá con un nombre más específico "
+                            "(ej. 'La Carlota, Córdoba')."
+                        ):
+                            pass
+                        continue
+
+                    if estado in ("sin_clima", "error"):
+                        msj = info.get("error", "Sin datos disponibles")
+                        st.warning(
+                            f"⚠️ **{cliente}** — {loc}: {msj}"
+                        )
+                        continue
+
+                    # Estado OK — mostrar info climática
+                    n_crit = info["n_alertas_criticas"]
+                    n_warn = info["n_alertas_warning"]
+
+                    # Severidad REAL máxima (HOY + futuro), considerando
+                    # viento + lluvia + HR + acumulación. Esto puede subir el
+                    # nivel del semáforo más allá de lo que dice solo el THI
+                    # clásico — por ej. mañana fría con viento y lluvia que
+                    # el THI marca como "sin estrés" pero el bovino siente.
+                    _sev_real_max = info.get(
+                        "severidad_real_max", "🟢 Sin estrés"
                     )
-                else:
-                    for grupo in info["alertas_lotes"]:
-                        # Una sola fila por lote con todas las alertas
-                        # concatenadas. Mucho más compacto que un
-                        # st.error/warning grande por cada alerta.
-                        _items = []
-                        _sev_max = "warning"
-                        for a in grupo["alertas"]:
-                            if a.get("severidad") == "critica":
-                                _sev_max = "critica"
-                            _items.append(
-                                f"{a['icono']} <b>{a['titulo']}</b> "
-                                f"<span style='color:#666;'>"
-                                f"({a['cuando']})</span>"
+                    _sev_rank_real = info.get("severidad_real_max_rank", 1)
+
+                    # Combinar: el color/ícono del título es el peor entre
+                    # las alertas predictivas y la severidad real.
+                    if n_crit > 0 or _sev_rank_real >= 4:
+                        titulo_color = "🔴"
+                        box_func = st.error
+                    elif n_warn > 0 or _sev_rank_real == 3:
+                        titulo_color = "🟠"
+                        box_func = st.warning
+                    elif _sev_rank_real == 2:
+                        titulo_color = "🟡"
+                        box_func = st.warning
+                    else:
+                        titulo_color = "🟢"
+                        box_func = st.success
+
+                    # Etiqueta del título: mostrar HOY explícito y, si el
+                    # peor día de la semana es PEOR que hoy, agregar
+                    # "→ peor DD/MM: ..." para que se entienda por qué el
+                    # semáforo del título no coincide con el de hoy.
+                    _sev_real_hoy = info.get(
+                        "severidad_real_hoy", "🟢 Sin estrés"
+                    )
+                    _sev_rank_hoy = _sev_rank_real if _sev_real_hoy == _sev_real_max else None
+                    _fecha_peor = info.get("severidad_real_max_fecha")
+                    _tramo_peor = info.get("severidad_real_max_tramo")
+
+                    # Helper rápido para sacar el rank de la sev de hoy
+                    _rk = {"🔴": 4, "🟠": 3, "🟡": 2, "🟢": 1}
+                    _rank_hoy = _rk.get(
+                        (_sev_real_hoy[0] if _sev_real_hoy else "🟢"), 1
+                    )
+
+                    _label_estado = f"HOY {_sev_real_hoy}"
+                    # Si el peor de la semana es distinto/peor que hoy,
+                    # explicitar el día.
+                    if _sev_rank_real > _rank_hoy and _fecha_peor:
+                        # Formato dd/mm para que se lea rápido
+                        try:
+                            _fp = datetime.strptime(
+                                _fecha_peor, "%Y-%m-%d"
+                            ).strftime("%d/%m")
+                        except Exception:
+                            _fp = _fecha_peor
+                        _label_estado += (
+                            f" → peor {_fp}: {_sev_real_max}"
+                        )
+
+                    # Si el COLOR del título es más severo que la
+                    # severidad climática real (es decir, lo dispararon
+                    # las alertas predictivas por categoría/lotes), agregar
+                    # al título un sufijo que aclare la causa. Así no
+                    # parece arbitrario que el círculo sea naranja cuando
+                    # el clima de HOY dice atención (amarillo).
+                    _color_title_rank = _rk.get(titulo_color, 1)
+                    _sufijo_lotes = ""
+                    if _color_title_rank > _sev_rank_real and (
+                        n_crit > 0 or n_warn > 0
+                    ):
+                        # Detectar categorías afectadas para mostrar
+                        _cats_afectadas = []
+                        for _g in info.get("alertas_lotes", []) or []:
+                            _c = _g.get("categoria", "") or ""
+                            if _c and _c not in _cats_afectadas:
+                                _cats_afectadas.append(_c)
+                        _cats_str = (
+                            ", ".join(_cats_afectadas[:2])
+                            if _cats_afectadas else "lotes vulnerables"
+                        )
+                        _total_alertas = n_crit + n_warn
+                        _sufijo_lotes = (
+                            f" · 🚨 {_total_alertas} "
+                            f"alerta(s) por {_cats_str}"
+                        )
+
+                    st.markdown(
+                        f"{titulo_color} **{cliente}** — {loc} · "
+                        f"{info['temp_c']:.0f}°C · "
+                        f"THI {info['thi']:.0f} · {_label_estado}"
+                        f"{_sufijo_lotes}"
+                    )
+                    with st.container():
+                        # Línea compacta de datos climáticos + ubicación, en
+                        # vez de 4 métricas grandes que ocupan mucho vertical.
+                        _ubic_html = ""
+                        if "nombre_geocode" in info:
+                            _ubic_html = (
+                                f" · 📍 {info['nombre_geocode']} "
+                                f"<span style='color:#999;font-size:0.85em;'>"
+                                f"({info['lat']:.2f}, {info['lon']:.2f})</span>"
                             )
-                        _bg = ("#FBE9E9" if _sev_max == "critica"
-                               else "#FFF7E0")
-                        _bd = ("#E24B4A" if _sev_max == "critica"
-                               else "#EF9F27")
                         st.markdown(
-                            f"<div style='background:{_bg};"
-                            f"border-left:3px solid {_bd};"
-                            f"padding:6px 10px;margin-bottom:4px;"
-                            f"font-size:0.9em;border-radius:4px;'>"
-                            f"<b>{grupo['lote']}</b> "
-                            f"<span style='color:#888;'>"
-                            f"({grupo['categoria']})</span> — "
-                            + " · ".join(_items)
-                            + "</div>",
+                            f"<div style='font-size:0.95em;color:#444;"
+                            f"margin-bottom:8px;'>"
+                            f"🌡️ <b>{info['temp_c']:.0f}°C</b> · "
+                            f"💧 <b>{info['humedad_pct']:.0f}%</b> · "
+                            f"📊 THI <b>{info['thi']:.0f}</b> "
+                            f"({info['thi_estado']})"
+                            f"{_ubic_html}"
+                            f"</div>",
                             unsafe_allow_html=True,
                         )
 
-        if datos_clima["sin_localidad"]:
-            st.caption(
-                f"💡 Clientes sin localidad cargada (no se consulta clima): "
-                f"{', '.join(datos_clima['sin_localidad'])}. "
-                "Cargá la localidad en **🏢 Clientes/Lotes** para que el "
-                "sistema consulte el clima de ellos también."
-            )
+                        # Pronóstico de 7 días — siempre visible para tener
+                        # el clima por delante en cada cliente.
+                        _pron = info.get("pronostico_7d") or []
+                        if _pron:
+                            _filas_pron = []
+                            for d in _pron:
+                                _thi_d = d.get("thi")
+                                _estado_d = d.get("thi_estado", "—") or "—"
+                                _filas_pron.append({
+                                    "Tramo": d.get("tramo", "—"),
+                                    "Fecha": d.get("fecha", "—"),
+                                    "T° min": (
+                                        f"{d['t_min']:.0f}°C"
+                                        if d.get("t_min") is not None
+                                        else "—"
+                                    ),
+                                    "T° máx": (
+                                        f"{d['t_max']:.0f}°C"
+                                        if d.get("t_max") is not None
+                                        else "—"
+                                    ),
+                                    "HR": (
+                                        f"{d['hr_media']:.0f}%"
+                                        if d.get("hr_media") is not None
+                                        else "—"
+                                    ),
+                                    "Lluvia": (
+                                        f"{d['precipitacion_mm']:.1f} mm"
+                                        if d.get("precipitacion_mm") not in
+                                        (None, 0) else (
+                                            "—"
+                                            if d.get("precipitacion_mm") is None
+                                            else "0 mm"
+                                        )
+                                    ),
+                                    "Viento máx": (
+                                        f"{d['viento_max_kmh']:.0f} km/h"
+                                        if d.get("viento_max_kmh") is not None
+                                        else "—"
+                                    ),
+                                    "Cielo": (
+                                        # Convertir % nubes a un icono
+                                        # rápido de leer
+                                        (
+                                            "☀️ Despejado"
+                                            if (d.get("nubes_pct") or 0) < 30
+                                            else (
+                                                "⛅ Parcial"
+                                                if (d.get("nubes_pct") or 0) < 70
+                                                else "☁️ Cubierto"
+                                            )
+                                        ) + f" ({d['nubes_pct']:.0f}%)"
+                                        if d.get("nubes_pct") is not None
+                                        else "—"
+                                    ),
+                                    "THI": (
+                                        f"{_thi_d:.0f}"
+                                        if _thi_d is not None else "—"
+                                    ),
+                                    "Estado (THI)": _estado_d,
+                                    "Severidad real": d.get(
+                                        "severidad_real", "—",
+                                    ),
+                                })
+                            st.markdown(
+                                "<div style='font-size:0.85em;color:#666;"
+                                "margin-top:6px;margin-bottom:4px;'>"
+                                "<b>Clima 14 días</b> (7 pasados + HOY "
+                                "+ 7 futuros) · "
+                                "<i>THI = índice clásico (T°máx + HR media). "
+                                "Severidad real = THI ajustado por viento "
+                                "(Mader 2006) + frío con wind chill bovino "
+                                "+ barro por lluvia + falta de secado por "
+                                "cielo cubierto sostenido.</i>"
+                                "</div>",
+                                unsafe_allow_html=True,
+                            )
+                            st.dataframe(
+                                pd.DataFrame(_filas_pron),
+                                hide_index=True, width="stretch",
+                            )
+
+                        if not info["alertas_lotes"]:
+                            st.caption(
+                                f"✅ Sin alertas para los lotes activos en "
+                                f"los próximos 7 días."
+                            )
+                        else:
+                            for grupo in info["alertas_lotes"]:
+                                # Una sola fila por lote con todas las alertas
+                                # concatenadas. Mucho más compacto que un
+                                # st.error/warning grande por cada alerta.
+                                _items = []
+                                _sev_max = "warning"
+                                for a in grupo["alertas"]:
+                                    if a.get("severidad") == "critica":
+                                        _sev_max = "critica"
+                                    _items.append(
+                                        f"{a['icono']} <b>{a['titulo']}</b> "
+                                        f"<span style='color:#666;'>"
+                                        f"({a['cuando']})</span>"
+                                    )
+                                _bg = ("#FBE9E9" if _sev_max == "critica"
+                                       else "#FFF7E0")
+                                _bd = ("#E24B4A" if _sev_max == "critica"
+                                       else "#EF9F27")
+                                st.markdown(
+                                    f"<div style='background:{_bg};"
+                                    f"border-left:3px solid {_bd};"
+                                    f"padding:6px 10px;margin-bottom:4px;"
+                                    f"font-size:0.9em;border-radius:4px;'>"
+                                    f"<b>{grupo['lote']}</b> "
+                                    f"<span style='color:#888;'>"
+                                    f"({grupo['categoria']})</span> — "
+                                    + " · ".join(_items)
+                                    + "</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                if datos_clima["sin_localidad"]:
+                    st.caption(
+                        f"💡 Clientes sin localidad cargada (no se consulta clima): "
+                        f"{', '.join(datos_clima['sin_localidad'])}. "
+                        "Cargá la localidad en **🏢 Clientes/Lotes** para que el "
+                        "sistema consulte el clima de ellos también."
+                    )
 
     # Lotes que necesitan atención
-    col_la, col_lb = st.columns(2)
-    with col_la:
-        st.markdown("### ⚠️ Lotes a pesar")
-        if not kpis["lotes_a_pesar"]:
-            st.success("Todos los lotes tienen pesada reciente ✅")
-        else:
-            for l in kpis["lotes_a_pesar"][:8]:
-                st.warning(
-                    f"**{l['cliente_nombre']}** — {l['identificador']}  \n"
-                    f"_{l['razon']}_"
-                )
+    with _cont_pesar:
+        with st.expander(
+            f"⚖️ Lotes a pesar y objetivos "
+            f"({len(kpis.get('lotes_a_pesar') or [])} a pesar · "
+            f"{len(kpis.get('lotes_cerca_objetivo') or [])} "
+            f"cerca del objetivo)",
+            expanded=False,
+        ):
+            col_la, col_lb = st.columns(2)
+            with col_la:
+                st.markdown("### ⚠️ Lotes a pesar")
+                if not kpis["lotes_a_pesar"]:
+                    st.success("Todos los lotes tienen pesada reciente ✅")
+                else:
+                    for l in kpis["lotes_a_pesar"][:8]:
+                        st.warning(
+                            f"**{l['cliente_nombre']}** — {l['identificador']}  \n"
+                            f"_{l['razon']}_"
+                        )
 
-    with col_lb:
-        st.markdown("### 🎯 Cerca del objetivo")
-        if not kpis["lotes_cerca_objetivo"]:
-            st.info("Sin lotes próximos al peso objetivo")
-        else:
-            for l in kpis["lotes_cerca_objetivo"][:8]:
-                st.success(
-                    f"**{l['cliente_nombre']}** — {l['identificador']}  \n"
-                    f"_{l['ultimo_peso_kg']:.0f} / "
-                    f"{l['objetivo_peso_kg']:.0f} kg "
-                    f"({l['ratio_objetivo']*100:.0f}%) — "
-                    f"faltan {l['dif_kg']:.0f} kg_"
-                )
+            with col_lb:
+                st.markdown("### 🎯 Cerca del objetivo")
+                if not kpis["lotes_cerca_objetivo"]:
+                    st.info("Sin lotes próximos al peso objetivo")
+                else:
+                    for l in kpis["lotes_cerca_objetivo"][:8]:
+                        st.success(
+                            f"**{l['cliente_nombre']}** — {l['identificador']}  \n"
+                            f"_{l['ultimo_peso_kg']:.0f} / "
+                            f"{l['objetivo_peso_kg']:.0f} kg "
+                            f"({l['ratio_objetivo']*100:.0f}%) — "
+                            f"faltan {l['dif_kg']:.0f} kg_"
+                        )
 
-    st.divider()
 
     # ═══════════════════════════════════════════════════════════════
     # LOGÍSTICA — entregas próximas a vencer y stock por agotar
     # ═══════════════════════════════════════════════════════════════
-    st.markdown("### 📦 Logística — stock y próximas entregas")
 
     # Atajo: registrar entrega directamente desde el dashboard
-    with st.expander(
-        "➕ Registrar entrega rápida (atajo desde dashboard)",
-        expanded=False,
-    ):
-        st.caption(
-            "Cargá una entrega de producto sin tener que ir a la "
-            "ficha del cliente. El stock se actualiza automáticamente "
-            "en la tabla de abajo."
-        )
-        _clis_dash = [
-            c for c in db.listar_clientes()
-            if c.get("estado", "activo") == "activo"
-        ]
-        if not _clis_dash:
-            st.info("No hay clientes activos cargados todavía.")
-        else:
-            # IMPORTANTE: sacamos esto de st.form porque dentro de un
-            # form los widgets NO son reactivos — al cambiar el cliente,
-            # el dropdown de lotes no se actualiza hasta hacer submit
-            # (y entonces ya intentó crear la entrega con el lote
-            # equivocado). Con widgets sueltos, Streamlit rerendea con
-            # cada cambio y filtra los lotes del cliente seleccionado.
-            _opc_clis = {
-                c["nombre"]: c["id"] for c in _clis_dash
-            }
-            _col_q1, _col_q2 = st.columns(2)
-            with _col_q1:
-                _cli_q = st.selectbox(
-                    "Cliente",
-                    list(_opc_clis.keys()),
-                    key="dash_ent_cli",
-                )
-                _cli_id_q = _opc_clis[_cli_q]
-                _lotes_q = db.listar_lotes(
-                    cliente_id=_cli_id_q, estado="activo",
-                )
-                _opc_lotes_q = {
-                    f"{l['identificador']} ({l.get('categoria','')})":
-                    l["id"]
-                    for l in _lotes_q
-                }
-                if not _opc_lotes_q:
-                    st.warning(
-                        "Este cliente no tiene lotes activos."
-                    )
-                    _lote_id_q = None
-                    _lote_sel_q = "—"
-                else:
-                    # Forzamos un key dependiente del cliente, así
-                    # cuando cambiás de cliente el selectbox se resetea
-                    # al primer lote del cliente nuevo (no queda el
-                    # índice del cliente anterior).
-                    _lote_sel_q = st.selectbox(
-                        "Lote", list(_opc_lotes_q.keys()),
-                        key=f"dash_ent_lote_{_cli_id_q}",
-                    )
-                    _lote_id_q = _opc_lotes_q[_lote_sel_q]
-            with _col_q2:
-                # Si el lote tiene dieta, sugerir productos
-                _sug_productos = []
-                if _lote_id_q:
-                    try:
-                        from src.stock_producto import (
-                            listar_productos_lote as _list_prod_q,
-                        )
-                        _sug_productos = _list_prod_q(_lote_id_q)
-                    except Exception:
-                        _sug_productos = []
-                _producto_q = st.text_input(
-                    "Producto",
-                    placeholder=(
-                        "Fibroter / Fibrogreen / otro"
-                        if not _sug_productos
-                        else (
-                            "Productos en dieta: "
-                            + ", ".join(_sug_productos[:3])
-                        )
-                    ),
-                    key="dash_ent_prod",
-                )
-                _fecha_q = st.date_input(
-                    "Fecha de entrega",
-                    value=datetime.now().date(),
-                    key="dash_ent_fecha",
-                )
-
-            _col_q3, _col_q4, _col_q5 = st.columns(3)
-            with _col_q3:
-                _formato_q = st.selectbox(
-                    "Formato", ["bolsa", "granel"],
-                    key="dash_ent_fmt",
-                )
-            with _col_q4:
-                if _formato_q == "bolsa":
-                    _bolsas_q = st.number_input(
-                        "Cantidad de bolsas",
-                        min_value=0.0, step=1.0, value=0.0,
-                        key="dash_ent_bolsas",
-                    )
-                    _kg_bolsa_q = st.number_input(
-                        "Kg por bolsa", min_value=0.0,
-                        step=1.0, value=30.0,
-                        key="dash_ent_kgb",
-                    )
-                    _kg_total_q = _bolsas_q * _kg_bolsa_q
-                else:
-                    _kg_total_q = st.number_input(
-                        "Kg granel", min_value=0.0,
-                        step=10.0, value=0.0,
-                        key="dash_ent_kgg",
-                    )
-                    _bolsas_q = 0
-                    _kg_bolsa_q = 0
-            with _col_q5:
-                # Cuando es bolsa, pedimos PRECIO POR BOLSA (es lo
-                # que el asesor maneja en la cabeza). Cuando es
-                # granel, precio por kg.
-                if _formato_q == "bolsa" and _kg_bolsa_q > 0:
-                    _precio_bolsa_q = st.number_input(
-                        f"Precio por bolsa de {_kg_bolsa_q:.0f} kg",
-                        min_value=0.0, step=100.0, value=0.0,
-                        key="dash_ent_precio_bolsa",
-                        help=(
-                            "Lo que pagás por cada bolsa. El "
-                            "sistema calcula el precio por kg "
-                            "automáticamente."
-                        ),
-                    )
-                    _precio_q = (
-                        _precio_bolsa_q / _kg_bolsa_q
-                        if _kg_bolsa_q > 0 else 0
-                    )
-                else:
-                    _precio_q = st.number_input(
-                        "Precio $/kg",
-                        min_value=0.0, step=10.0, value=0.0,
-                        key="dash_ent_precio",
-                    )
-
-            if _kg_total_q > 0:
-                _txt_unidad = (
-                    f"= ${_precio_q:,.0f}/kg"
-                    if _formato_q == "bolsa" and _precio_q > 0
-                    else ""
-                )
-                st.caption(
-                    f"📦 Total: **{_kg_total_q:.0f} kg** "
-                    f"({_formato_q}){_txt_unidad}"
-                    + (f" · **${_precio_q * _kg_total_q:,.0f}**"
-                       if _precio_q > 0 else "")
-                )
-
-            _notas_q = st.text_input(
-                "Notas (opcional)",
-                placeholder="Ej: remito 1234",
-                key="dash_ent_notas",
+    with _cont_entrega:
+        with st.expander(
+            "➕ Registrar entrega rápida (atajo desde dashboard)",
+            expanded=False,
+        ):
+            st.caption(
+                "Cargá una entrega de producto sin tener que ir a la "
+                "ficha del cliente. El stock se actualiza automáticamente "
+                "en la tabla de abajo."
             )
+            _clis_dash = [
+                c for c in db.listar_clientes()
+                if c.get("estado", "activo") == "activo"
+            ]
+            if not _clis_dash:
+                st.info("No hay clientes activos cargados todavía.")
+            else:
+                # IMPORTANTE: sacamos esto de st.form porque dentro de un
+                # form los widgets NO son reactivos — al cambiar el cliente,
+                # el dropdown de lotes no se actualiza hasta hacer submit
+                # (y entonces ya intentó crear la entrega con el lote
+                # equivocado). Con widgets sueltos, Streamlit rerendea con
+                # cada cambio y filtra los lotes del cliente seleccionado.
+                _opc_clis = {
+                    c["nombre"]: c["id"] for c in _clis_dash
+                }
+                _col_q1, _col_q2 = st.columns(2)
+                with _col_q1:
+                    _cli_q = st.selectbox(
+                        "Cliente",
+                        list(_opc_clis.keys()),
+                        key="dash_ent_cli",
+                    )
+                    _cli_id_q = _opc_clis[_cli_q]
+                    _lotes_q = db.listar_lotes(
+                        cliente_id=_cli_id_q, estado="activo",
+                    )
+                    _opc_lotes_q = {
+                        f"{l['identificador']} ({l.get('categoria','')})":
+                        l["id"]
+                        for l in _lotes_q
+                    }
+                    if not _opc_lotes_q:
+                        st.warning(
+                            "Este cliente no tiene lotes activos."
+                        )
+                        _lote_id_q = None
+                        _lote_sel_q = "—"
+                    else:
+                        # Forzamos un key dependiente del cliente, así
+                        # cuando cambiás de cliente el selectbox se resetea
+                        # al primer lote del cliente nuevo (no queda el
+                        # índice del cliente anterior).
+                        _lote_sel_q = st.selectbox(
+                            "Lote", list(_opc_lotes_q.keys()),
+                            key=f"dash_ent_lote_{_cli_id_q}",
+                        )
+                        _lote_id_q = _opc_lotes_q[_lote_sel_q]
+                with _col_q2:
+                    # Si el lote tiene dieta, sugerir productos
+                    _sug_productos = []
+                    if _lote_id_q:
+                        try:
+                            from src.stock_producto import (
+                                listar_productos_lote as _list_prod_q,
+                            )
+                            _sug_productos = _list_prod_q(_lote_id_q)
+                        except Exception:
+                            _sug_productos = []
+                    _producto_q = st.text_input(
+                        "Producto",
+                        placeholder=(
+                            "Fibroter / Fibrogreen / otro"
+                            if not _sug_productos
+                            else (
+                                "Productos en dieta: "
+                                + ", ".join(_sug_productos[:3])
+                            )
+                        ),
+                        key="dash_ent_prod",
+                    )
+                    _fecha_q = st.date_input(
+                        "Fecha de entrega",
+                        value=datetime.now().date(),
+                        key="dash_ent_fecha",
+                    )
 
-            if st.button(
-                "📦 Registrar entrega",
-                type="primary",
-                key="dash_ent_submit",
-            ):
-                    if not _producto_q:
-                        st.error("Falta el nombre del producto.")
-                    elif _kg_total_q <= 0:
-                        st.error("La cantidad debe ser mayor a 0.")
-                    elif not _lote_id_q:
-                        st.error(
-                            "El cliente no tiene lotes activos. "
-                            "Cargá uno primero."
+                _col_q3, _col_q4, _col_q5 = st.columns(3)
+                with _col_q3:
+                    _formato_q = st.selectbox(
+                        "Formato", ["bolsa", "granel"],
+                        key="dash_ent_fmt",
+                    )
+                with _col_q4:
+                    if _formato_q == "bolsa":
+                        _bolsas_q = st.number_input(
+                            "Cantidad de bolsas",
+                            min_value=0.0, step=1.0, value=0.0,
+                            key="dash_ent_bolsas",
+                        )
+                        _kg_bolsa_q = st.number_input(
+                            "Kg por bolsa", min_value=0.0,
+                            step=1.0, value=30.0,
+                            key="dash_ent_kgb",
+                        )
+                        _kg_total_q = _bolsas_q * _kg_bolsa_q
+                    else:
+                        _kg_total_q = st.number_input(
+                            "Kg granel", min_value=0.0,
+                            step=10.0, value=0.0,
+                            key="dash_ent_kgg",
+                        )
+                        _bolsas_q = 0
+                        _kg_bolsa_q = 0
+                with _col_q5:
+                    # Cuando es bolsa, pedimos PRECIO POR BOLSA (es lo
+                    # que el asesor maneja en la cabeza). Cuando es
+                    # granel, precio por kg.
+                    if _formato_q == "bolsa" and _kg_bolsa_q > 0:
+                        _precio_bolsa_q = st.number_input(
+                            f"Precio por bolsa de {_kg_bolsa_q:.0f} kg",
+                            min_value=0.0, step=100.0, value=0.0,
+                            key="dash_ent_precio_bolsa",
+                            help=(
+                                "Lo que pagás por cada bolsa. El "
+                                "sistema calcula el precio por kg "
+                                "automáticamente."
+                            ),
+                        )
+                        _precio_q = (
+                            _precio_bolsa_q / _kg_bolsa_q
+                            if _kg_bolsa_q > 0 else 0
                         )
                     else:
-                        try:
-                            db.crear_entrega(
-                                cliente_id=_cli_id_q,
-                                lote_id=_lote_id_q,
-                                producto_nombre=_producto_q,
-                                kg_total=_kg_total_q,
-                                fecha_entrega=_fecha_q.isoformat(),
-                                formato=_formato_q,
-                                cantidad_bolsas=_bolsas_q,
-                                kg_por_bolsa=_kg_bolsa_q,
-                                precio_kg=_precio_q,
-                                precio_total=_precio_q * _kg_total_q,
-                                notas=_notas_q,
+                        _precio_q = st.number_input(
+                            "Precio $/kg",
+                            min_value=0.0, step=10.0, value=0.0,
+                            key="dash_ent_precio",
+                        )
+
+                if _kg_total_q > 0:
+                    _txt_unidad = (
+                        f"= ${_precio_q:,.0f}/kg"
+                        if _formato_q == "bolsa" and _precio_q > 0
+                        else ""
+                    )
+                    st.caption(
+                        f"📦 Total: **{_kg_total_q:.0f} kg** "
+                        f"({_formato_q}){_txt_unidad}"
+                        + (f" · **${_precio_q * _kg_total_q:,.0f}**"
+                           if _precio_q > 0 else "")
+                    )
+
+                _notas_q = st.text_input(
+                    "Notas (opcional)",
+                    placeholder="Ej: remito 1234",
+                    key="dash_ent_notas",
+                )
+
+                if st.button(
+                    "📦 Registrar entrega",
+                    type="primary",
+                    key="dash_ent_submit",
+                ):
+                        if not _producto_q:
+                            st.error("Falta el nombre del producto.")
+                        elif _kg_total_q <= 0:
+                            st.error("La cantidad debe ser mayor a 0.")
+                        elif not _lote_id_q:
+                            st.error(
+                                "El cliente no tiene lotes activos. "
+                                "Cargá uno primero."
                             )
-                            st.success(
-                                f"✅ Entrega registrada para "
-                                f"**{_cli_q}** — {_kg_total_q:.0f} kg "
-                                f"de {_producto_q}. La tabla de stock "
-                                f"de abajo se va a actualizar."
-                            )
-                            st.rerun()
-                        except Exception as _e_q:
-                            st.error(f"Error: {_e_q}")
+                        else:
+                            try:
+                                db.crear_entrega(
+                                    cliente_id=_cli_id_q,
+                                    lote_id=_lote_id_q,
+                                    producto_nombre=_producto_q,
+                                    kg_total=_kg_total_q,
+                                    fecha_entrega=_fecha_q.isoformat(),
+                                    formato=_formato_q,
+                                    cantidad_bolsas=_bolsas_q,
+                                    kg_por_bolsa=_kg_bolsa_q,
+                                    precio_kg=_precio_q,
+                                    precio_total=_precio_q * _kg_total_q,
+                                    notas=_notas_q,
+                                )
+                                st.success(
+                                    f"✅ Entrega registrada para "
+                                    f"**{_cli_q}** — {_kg_total_q:.0f} kg "
+                                    f"de {_producto_q}. La tabla de stock "
+                                    f"de abajo se va a actualizar."
+                                )
+                                st.rerun()
+                            except Exception as _e_q:
+                                st.error(f"Error: {_e_q}")
 
     # ─────── KPIs del mes ───────
     try:
@@ -3395,29 +3454,30 @@ with tab_inicio:
         # con TTL amplio + botón manual para refrescar.
         import time as _t_c
         _TTL_CACHE_STOCK = 300  # 5 minutos
-        _btn_col1, _btn_col2 = st.columns([6, 1])
-        with _btn_col2:
-            if st.button(
-                "🔄 Actualizar",
-                key="_btn_refresh_stock",
-                help="Recalcular stock actual (por defecto se refresca cada 5 min)",
-                width="stretch",
-            ):
-                st.session_state.pop("_dash_stock", None)
-                st.session_state.pop("_dash_stock_ts", None)
-                # Invalidar también el TTL cache global de queries DB
-                try:
-                    import src.database as _db_inv
-                    _db_inv.invalidar_cache_lecturas()
-                except Exception:
-                    pass
-                # Forzar recomputo saltando el blob precomputado por
-                # el cron. Sin este flag, la próxima ejecución del
-                # render vería el blob del cron (fresco por 15 min)
-                # y no recalcularía — el asesor pensaría que el
-                # botón no hizo nada.
-                st.session_state["_force_recompute_stock"] = True
-                st.rerun()
+        with _cont_entrega:
+            _btn_col1, _btn_col2 = st.columns([6, 1])
+            with _btn_col2:
+                if st.button(
+                    "🔄 Actualizar",
+                    key="_btn_refresh_stock",
+                    help="Recalcular stock actual (por defecto se refresca cada 5 min)",
+                    width="stretch",
+                ):
+                    st.session_state.pop("_dash_stock", None)
+                    st.session_state.pop("_dash_stock_ts", None)
+                    # Invalidar también el TTL cache global de queries DB
+                    try:
+                        import src.database as _db_inv
+                        _db_inv.invalidar_cache_lecturas()
+                    except Exception:
+                        pass
+                    # Forzar recomputo saltando el blob precomputado por
+                    # el cron. Sin este flag, la próxima ejecución del
+                    # render vería el blob del cron (fresco por 15 min)
+                    # y no recalcularía — el asesor pensaría que el
+                    # botón no hizo nada.
+                    st.session_state["_force_recompute_stock"] = True
+                    st.rerun()
 
         # Fast path #1: leer el blob precomputado por el cron
         # (GH Actions cada 5 min). Si está fresco (≤15 min), lo
@@ -3459,24 +3519,25 @@ with tab_inicio:
                 "_dash_stock_ts", 0
             ) < _TTL_CACHE_STOCK
         )
-        if _edad_cache_db is not None and _cache_valida:
-            _mins = max(0, int(_edad_cache_db / 60))
-            st.caption(
-                f"🛰️ Datos precomputados hace {_mins} min "
-                f"(cron cada 5 min). "
-                f"Botón 🔄 para forzar recálculo con los datos "
-                f"más nuevos."
-            )
-        if not _cache_valida:
-            _spinner_msg = (
-                f"⏳ Calculando stock ({len(db.listar_clientes())} clientes)... "
-                "Puede tardar 15-60 seg la primera vez. "
-                "Después queda cacheado 5 min."
-            )
-            _spinner_ph = st.empty()
-            _spinner_ph.info(_spinner_msg)
-        else:
-            _spinner_ph = None
+        with _cont_entrega:
+            if _edad_cache_db is not None and _cache_valida:
+                _mins = max(0, int(_edad_cache_db / 60))
+                st.caption(
+                    f"🛰️ Datos precomputados hace {_mins} min "
+                    f"(cron cada 5 min). "
+                    f"Botón 🔄 para forzar recálculo con los datos "
+                    f"más nuevos."
+                )
+            if not _cache_valida:
+                _spinner_msg = (
+                    f"⏳ Calculando stock ({len(db.listar_clientes())} clientes)... "
+                    "Puede tardar 15-60 seg la primera vez. "
+                    "Después queda cacheado 5 min."
+                )
+                _spinner_ph = st.empty()
+                _spinner_ph.info(_spinner_msg)
+            else:
+                _spinner_ph = None
         _c_dash = st.session_state.get("_dash_stock", {}) or {}
 
         _filas_log = (
@@ -3626,11 +3687,18 @@ with tab_inicio:
                 "0 0 0 0-10z'></path></svg>"
             )
 
-            def _tarjeta_pri(num, label, bg, fg, svg):
+            def _tarjeta_pri(num, label, bg, fg, svg, panel):
+                # Tarjeta clickeable: link con query param ?panel=
+                # (target=_self para no abrir pestaña nueva). Se
+                # preserva lote_id si estaba en la URL.
                 return (
-                    '<div style="flex:1;min-width:140px;'
+                    f'<a href="?panel={panel}{_qs_lote_keep}" '
+                    'target="_self" style="text-decoration:none;'
+                    'color:inherit;display:block;flex:1;'
+                    'min-width:140px;">'
+                    '<div style="'
                     'text-align:center;padding:14px 8px;'
-                    'border-radius:10px;'
+                    'border-radius:10px;cursor:pointer;'
                     'background:rgba(128,128,128,0.06);'
                     'border:1px solid rgba(128,128,128,0.18);">'
                     '<div style="width:38px;height:38px;'
@@ -3643,27 +3711,27 @@ with tab_inicio:
                     f'line-height:1.1;">{num}</div>'
                     '<div style="font-size:11.5px;color:#8a8f98;'
                     f'margin-top:2px;">{label}</div>'
-                    '</div>'
+                    '</div></a>'
                 )
 
             _tarjetas_pri = [
                 _tarjeta_pri(
                     _n_pri_agotado, "Stock agotado",
-                    "#FCEBEB", "#A32D2D", _svg_caja,
+                    "#FCEBEB", "#A32D2D", _svg_caja, "stock",
                 ),
                 _tarjeta_pri(
                     _n_pri_urgente, "Entregas urgentes",
-                    "#FAEEDA", "#BA7517", _svg_camion,
+                    "#FAEEDA", "#BA7517", _svg_camion, "entregas",
                 ),
                 _tarjeta_pri(
                     _n_pri_llam, "Llamadas pendientes",
-                    "#E6F1FB", "#185FA5", _svg_tel,
+                    "#E6F1FB", "#185FA5", _svg_tel, "llamadas",
                 ),
             ]
             if _n_pri_clima is not None:
                 _tarjetas_pri.append(_tarjeta_pri(
                     _n_pri_clima, "Zonas con alerta climática",
-                    "#E1F5EE", "#0F6E56", _svg_clima,
+                    "#E1F5EE", "#0F6E56", _svg_clima, "clima",
                 ))
             _ph_prioridades.markdown(
                 '<div style="font-size:12px;font-weight:700;'
@@ -3678,104 +3746,293 @@ with tab_inicio:
         except Exception:
             pass
 
+        # ── Panel de detalle de la prioridad clickeada ──
+        # Las tarjetas de arriba son links (?panel=...). Acá se
+        # renderiza el detalle compacto justo debajo de la fila.
+        try:
+            if _panel_pri_sel in (
+                "stock", "entregas", "llamadas", "clima",
+            ):
+                with _cont_panel_pri, st.container(border=True):
+                    _tit_pan = {
+                        "stock": "📦 Stock agotado — reposición sugerida",
+                        "entregas": "🚚 Entregas urgentes (1-3 días)",
+                        "llamadas": "📞 Llamadas atrasadas / de hoy",
+                        "clima": "🌦️ Zonas con alerta climática",
+                    }[_panel_pri_sel]
+                    _c_pan_t, _c_pan_x = st.columns([6, 1])
+                    _c_pan_t.markdown(f"**{_tit_pan}**")
+                    _c_pan_x.markdown(
+                        f'<div style="text-align:right;">'
+                        f'<a href="{_href_cerrar_pri}" target="_self" '
+                        f'style="text-decoration:none;font-size:13px;'
+                        f'color:#8a8f98;">✕ Cerrar</a></div>',
+                        unsafe_allow_html=True,
+                    )
+                    if _panel_pri_sel == "stock":
+                        _rows_pan = []
+                        for _f_pan in _filas_log:
+                            try:
+                                _d_pan = float(
+                                    _f_pan.get("_dias_sort", 999) or 0
+                                )
+                            except Exception:
+                                _d_pan = 999.0
+                            if ("AGOTADO" in str(
+                                    _f_pan.get("Urgencia", ""))
+                                    or _d_pan <= 0):
+                                _rows_pan.append(_f_pan)
+                        if not _rows_pan:
+                            st.caption(
+                                "Sin clientes con stock agotado."
+                            )
+                        for _f_pan in _rows_pan:
+                            try:
+                                _cons_pan = float(str(
+                                    _f_pan.get("Consumo (kg/día)", 0)
+                                ).replace(",", "."))
+                            except Exception:
+                                _cons_pan = 0.0
+                            _sug_pan = (
+                                f" · reponer ~{_cons_pan * 14:.0f} kg "
+                                f"(14 días)" if _cons_pan > 0 else ""
+                            )
+                            st.markdown(
+                                f"- **{_f_pan.get('Cliente', '?')}** · "
+                                f"{_f_pan.get('Producto', '—')} · "
+                                f"stock "
+                                f"{_f_pan.get('Stock (kg)', '0')} kg"
+                                f"{_sug_pan}"
+                            )
+                    elif _panel_pri_sel == "entregas":
+                        _rows_pan = []
+                        for _f_pan in _filas_log:
+                            try:
+                                _d_pan = float(
+                                    _f_pan.get("_dias_sort", 999) or 0
+                                )
+                            except Exception:
+                                continue
+                            if 0 < _d_pan <= 3:
+                                _rows_pan.append((_d_pan, _f_pan))
+                        if not _rows_pan:
+                            st.caption(
+                                "Sin entregas con urgencia de "
+                                "1-3 días."
+                            )
+                        for _d_pan, _f_pan in sorted(
+                            _rows_pan, key=lambda x: x[0],
+                        ):
+                            st.markdown(
+                                f"- **{_f_pan.get('Cliente', '?')}** · "
+                                f"{_f_pan.get('Producto', '—')} · "
+                                f"se acaba "
+                                f"{_f_pan.get('Se acaba', '—')} "
+                                f"({_d_pan:.0f} día(s))"
+                            )
+                    elif _panel_pri_sel == "llamadas":
+                        _hoy_pan = datetime.now().date()
+                        _rows_pan = [
+                            r for r in (_recos or [])
+                            if str(r.get("fecha_objetivo", ""))
+                            <= _hoy_pan.isoformat()
+                        ]
+                        if not _rows_pan:
+                            st.caption(
+                                "Sin llamadas atrasadas ni para hoy."
+                            )
+                        for _r_pan in _rows_pan:
+                            try:
+                                _f_pan_d = datetime.strptime(
+                                    _r_pan["fecha_objetivo"],
+                                    "%Y-%m-%d",
+                                ).date()
+                            except Exception:
+                                _f_pan_d = _hoy_pan
+                            _atr_pan = (_hoy_pan - _f_pan_d).days
+                            _mot_pan = (
+                                (_r_pan.get("motivo") or "").strip()
+                                .replace("\n", " ")[:60]
+                            )
+                            _cp1, _cp2, _cp3 = st.columns([5, 1, 1])
+                            _cp1.markdown(
+                                f"**{_r_pan.get('cliente_nombre', '?')}"
+                                f"**"
+                                + (
+                                    f" · {_atr_pan} día(s) de atraso"
+                                    if _atr_pan > 0 else " · HOY"
+                                )
+                                + (f" · {_mot_pan}"
+                                   if _mot_pan else "")
+                            )
+                            if _cp2.button(
+                                "+7d",
+                                key=f"pri_reco7_{_r_pan['id']}",
+                                width="stretch",
+                                help="Postergar 7 días",
+                            ):
+                                from datetime import (
+                                    timedelta as _td_pan,
+                                )
+                                db.reprogramar_recordatorio(
+                                    _r_pan["id"],
+                                    (_f_pan_d + _td_pan(days=7))
+                                    .isoformat(),
+                                )
+                                st.rerun()
+                            if _cp3.button(
+                                "✕",
+                                key=f"pri_recox_{_r_pan['id']}",
+                                width="stretch",
+                                help="Cancelar este recordatorio",
+                            ):
+                                db.cancelar_recordatorio(
+                                    _r_pan["id"]
+                                )
+                                st.rerun()
+                        if _rows_pan:
+                            st.caption(
+                                "_Detalle completo en el expander "
+                                "📞 Llamados pendientes._"
+                            )
+                    elif _panel_pri_sel == "clima":
+                        _rows_pan = []
+                        for _i_pan in (
+                            datos_clima.get("consultadas") or []
+                        ):
+                            _nc_pan = _i_pan.get(
+                                "n_alertas_criticas") or 0
+                            _nw_pan = _i_pan.get(
+                                "n_alertas_warning") or 0
+                            _rk_pan = _i_pan.get(
+                                "severidad_real_max_rank") or 1
+                            if _nc_pan or _nw_pan or _rk_pan >= 3:
+                                _rows_pan.append(_i_pan)
+                        if not _rows_pan:
+                            st.caption(
+                                "Sin zonas con alerta climática."
+                            )
+                        for _i_pan in _rows_pan:
+                            _niv_pan = str(
+                                _i_pan.get("severidad_real_max")
+                                or "alerta"
+                            )
+                            st.markdown(
+                                f"- **{_i_pan.get('localidad', '?')}"
+                                f"** "
+                                f"({_i_pan.get('cliente', '?')}) · "
+                                f"{_niv_pan}"
+                                + (
+                                    f" · peor día "
+                                    f"{_i_pan.get('severidad_real_max_fecha')}"
+                                    if _i_pan.get(
+                                        'severidad_real_max_fecha')
+                                    else ""
+                                )
+                            )
+        except Exception:
+            pass
+
+
         # ═══════════════ BLOQUE VISUAL ═══════════════
         # KPIs del mes + barras de autonomía + cronograma.
         # Siempre se muestra (haya o no alertas) para dar contexto
         # al asesor sobre la salud general de la logística.
 
         # ── Fila 1: 4 KPIs grandes ──
-        _kpic1, _kpic2, _kpic3, _kpic4 = st.columns(4)
-        with _kpic1:
-            st.metric(
-                "Entregado este mes",
-                f"{_kg_mes:.0f} kg",
-                help=f"{len(_entregas_mes)} entregas a "
-                     f"{_clis_unicos_mes} cliente(s)",
-            )
-        with _kpic2:
-            _fact_str = (
-                f"$ {_fact_mes/1_000_000:.1f}M"
-                if _fact_mes >= 1_000_000 else f"$ {_fact_mes:,.0f}"
-            )
-            st.metric(
-                "Facturado este mes",
-                _fact_str,
-                delta=_delta_fact if _delta_fact else None,
-                delta_color="normal",
-            )
-        with _kpic3:
-            st.metric(
-                "Stock total en campo",
-                f"{_stock_total_kg:.0f} kg",
-                help=(
-                    f"{len(_autonomia_por_cliente_lote)} "
-                    f"lote(s)/producto(s) con stock vigente"
-                ),
-            )
-        with _kpic4:
-            if _proxima_entrega_fecha:
-                try:
-                    _f_agot = datetime.strptime(
-                        _proxima_entrega_fecha, "%Y-%m-%d"
-                    ).date()
-                    _dias_a_prox = (_f_agot - _hoy_log).days
-                    st.metric(
-                        "Próxima entrega",
-                        (f"en {_dias_a_prox} días"
-                         if _dias_a_prox > 0 else "HOY"),
-                        help=(
-                            f"{_proxima_entrega_cliente} · "
-                            f"{_f_agot.strftime('%d/%m')}"
-                        ),
-                    )
-                except Exception:
-                    st.metric("Próxima entrega", "—")
-            else:
+        with _exp_logistica:
+            _kpic1, _kpic2, _kpic3, _kpic4 = st.columns(4)
+            with _kpic1:
                 st.metric(
-                    "Próxima entrega", "—",
-                    help="Sin entregas registradas todavía",
+                    "Entregado este mes",
+                    f"{_kg_mes:.0f} kg",
+                    help=f"{len(_entregas_mes)} entregas a "
+                         f"{_clis_unicos_mes} cliente(s)",
                 )
+            with _kpic2:
+                _fact_str = (
+                    f"$ {_fact_mes/1_000_000:.1f}M"
+                    if _fact_mes >= 1_000_000 else f"$ {_fact_mes:,.0f}"
+                )
+                st.metric(
+                    "Facturado este mes",
+                    _fact_str,
+                    delta=_delta_fact if _delta_fact else None,
+                    delta_color="normal",
+                )
+            with _kpic3:
+                st.metric(
+                    "Stock total en campo",
+                    f"{_stock_total_kg:.0f} kg",
+                    help=(
+                        f"{len(_autonomia_por_cliente_lote)} "
+                        f"lote(s)/producto(s) con stock vigente"
+                    ),
+                )
+            with _kpic4:
+                if _proxima_entrega_fecha:
+                    try:
+                        _f_agot = datetime.strptime(
+                            _proxima_entrega_fecha, "%Y-%m-%d"
+                        ).date()
+                        _dias_a_prox = (_f_agot - _hoy_log).days
+                        st.metric(
+                            "Próxima entrega",
+                            (f"en {_dias_a_prox} días"
+                             if _dias_a_prox > 0 else "HOY"),
+                            help=(
+                                f"{_proxima_entrega_cliente} · "
+                                f"{_f_agot.strftime('%d/%m')}"
+                            ),
+                        )
+                    except Exception:
+                        st.metric("Próxima entrega", "—")
+                else:
+                    st.metric(
+                        "Próxima entrega", "—",
+                        help="Sin entregas registradas todavía",
+                    )
 
-        # ── Entregas registradas pero SIN dieta cargada ──
-        # Caso típico: el asesor cargó la entrega pero todavía no
-        # formuló la dieta del lote. Sin dieta no podemos calcular
-        # consumo, así que la entrega "no se ve" en las barras. La
-        # mostramos acá explícitamente para que el asesor sepa qué
-        # falta cargar.
-        if _entregas_sin_dieta:
-            st.markdown(
-                "##### ⚠️ Entregas registradas — falta dieta del lote"
-            )
-            st.caption(
-                "Estas entregas están guardadas correctamente, pero "
-                "el lote no tiene dieta cargada todavía. Sin dieta, "
-                "el sistema no puede calcular el consumo diario ni "
-                "estimar la autonomía. Formulá la dieta con el "
-                "Asesor IA o desde la pestaña Análisis."
-            )
-            for _esd in _entregas_sin_dieta:
-                _col_e1, _col_e2 = st.columns([3, 1])
-                with _col_e1:
-                    st.markdown(
-                        f"<div style='background:rgba(239,159,39,0.08);"
-                        f"border-left:3px solid #BA7517;"
-                        f"padding:8px 12px; margin-bottom:6px;"
-                        f"font-size:13px;'>"
-                        f"<strong>{_esd['cliente']}</strong> · "
-                        f"{_esd['lote']} · {_esd['producto']}<br>"
-                        f"<span style='color:#5F5E5A;'>"
-                        f"{_esd['kg_total']:.0f} kg entregados "
-                        f"({_esd['n_entregas']} entrega"
-                        f"{'s' if _esd['n_entregas'] > 1 else ''}, "
-                        f"última {_esd['ultima_fecha']})"
-                        f"</span></div>",
-                        unsafe_allow_html=True,
-                    )
-                with _col_e2:
-                    st.caption(
-                        "👉 Cargá la dieta del lote en Análisis o "
-                        "con el agente IA."
-                    )
+            # ── Entregas registradas pero SIN dieta cargada ──
+            # Caso típico: el asesor cargó la entrega pero todavía no
+            # formuló la dieta del lote. Sin dieta no podemos calcular
+            # consumo, así que la entrega "no se ve" en las barras. La
+            # mostramos acá explícitamente para que el asesor sepa qué
+            # falta cargar.
+            if _entregas_sin_dieta:
+                st.markdown(
+                    "##### ⚠️ Entregas registradas — falta dieta del lote"
+                )
+                st.caption(
+                    "Estas entregas están guardadas correctamente, pero "
+                    "el lote no tiene dieta cargada todavía. Sin dieta, "
+                    "el sistema no puede calcular el consumo diario ni "
+                    "estimar la autonomía. Formulá la dieta con el "
+                    "Asesor IA o desde la pestaña Análisis."
+                )
+                for _esd in _entregas_sin_dieta:
+                    _col_e1, _col_e2 = st.columns([3, 1])
+                    with _col_e1:
+                        st.markdown(
+                            f"<div style='background:rgba(239,159,39,0.08);"
+                            f"border-left:3px solid #BA7517;"
+                            f"padding:8px 12px; margin-bottom:6px;"
+                            f"font-size:13px;'>"
+                            f"<strong>{_esd['cliente']}</strong> · "
+                            f"{_esd['lote']} · {_esd['producto']}<br>"
+                            f"<span style='color:#5F5E5A;'>"
+                            f"{_esd['kg_total']:.0f} kg entregados "
+                            f"({_esd['n_entregas']} entrega"
+                            f"{'s' if _esd['n_entregas'] > 1 else ''}, "
+                            f"última {_esd['ultima_fecha']})"
+                            f"</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    with _col_e2:
+                        st.caption(
+                            "👉 Cargá la dieta del lote en Análisis o "
+                            "con el agente IA."
+                        )
 
         # ── Grilla "Mis clientes" con semáforo de stock ──
         # Reemplaza las barras de autonomía: una tarjeta por
@@ -3783,173 +4040,189 @@ with tab_inicio:
         # productos. Los clientes sin entregas registradas también
         # aparecen (semáforo gris, "Sin datos de stock").
         try:
-            _auto_por_cli = {}
-            for _a_g in _autonomia_por_cliente_lote:
-                _nom_a_g = _a_g.get("cliente") or "?"
-                _auto_por_cli.setdefault(_nom_a_g, []).append(_a_g)
+            with _cont_clientes:
+                _auto_por_cli = {}
+                for _a_g in _autonomia_por_cliente_lote:
+                    _nom_a_g = _a_g.get("cliente") or "?"
+                    _auto_por_cli.setdefault(_nom_a_g, []).append(_a_g)
 
-            _clientes_grid = [
-                c for c in db.listar_clientes()
-                if (c.get("estado") or "activo") == "activo"
-            ]
+                _clientes_grid = [
+                    c for c in db.listar_clientes()
+                    if (c.get("estado") or "activo") == "activo"
+                ]
 
-            def _dias_min_cli(_c_dm):
-                _its = _auto_por_cli.get(_c_dm.get("nombre"), [])
-                if not _its:
-                    return 9999.0
-                try:
-                    return min(
-                        float(x.get("dias") or 0) for x in _its
-                    )
-                except Exception:
-                    return 9999.0
-
-            _clientes_grid.sort(key=_dias_min_cli)
-
-            _cards_grid = []
-            for _c_g in _clientes_grid:
-                _nom_g = _c_g.get("nombre") or "?"
-                _loc_g = _c_g.get("localidad") or ""
-                _items_g = _auto_por_cli.get(_nom_g, [])
-                # Lotes activos del cliente (query cacheada, barata)
-                try:
-                    _lotes_g = db.listar_lotes(
-                        cliente_id=_c_g.get("id"), estado="activo",
-                    ) or []
-                except Exception:
-                    _lotes_g = []
-                _n_anim_g = 0
-                for _lt_g in _lotes_g:
+                def _dias_min_cli(_c_dm):
+                    _its = _auto_por_cli.get(_c_dm.get("nombre"), [])
+                    if not _its:
+                        return 9999.0
                     try:
-                        _n_anim_g += int(_lt_g.get("cantidad") or 0)
-                    except Exception:
-                        pass
-                if len(_lotes_g) == 1:
-                    _linea_lote_g = (
-                        f"{_lotes_g[0].get('categoria') or 'Lote'} · "
-                        f"{_n_anim_g} animales"
-                    )
-                elif len(_lotes_g) > 1:
-                    _linea_lote_g = (
-                        f"{len(_lotes_g)} lotes · "
-                        f"{_n_anim_g} animales"
-                    )
-                else:
-                    _linea_lote_g = "Sin lotes activos"
-                # Iniciales para el avatar
-                _partes_nom_g = [p for p in _nom_g.split() if p]
-                _inic_g = "".join(
-                    p[0] for p in _partes_nom_g[:2]
-                ).upper() or "?"
-
-                if _items_g:
-                    try:
-                        _peor_g = min(
-                            _items_g,
-                            key=lambda x: float(x.get("dias") or 0),
+                        return min(
+                            float(x.get("dias") or 0) for x in _its
                         )
                     except Exception:
-                        _peor_g = _items_g[0]
+                        return 9999.0
+
+                _clientes_grid.sort(key=_dias_min_cli)
+
+                _cards_grid = []
+                for _c_g in _clientes_grid:
+                    _nom_g = _c_g.get("nombre") or "?"
+                    _loc_g = _c_g.get("localidad") or ""
+                    _items_g = _auto_por_cli.get(_nom_g, [])
+                    # Lotes activos del cliente (query cacheada, barata)
                     try:
-                        _dias_g = float(_peor_g.get("dias") or 0)
+                        _lotes_g = db.listar_lotes(
+                            cliente_id=_c_g.get("id"), estado="activo",
+                        ) or []
                     except Exception:
-                        _dias_g = 0.0
-                    _prod_g = _peor_g.get("producto") or "—"
-                    try:
-                        _kg_g = float(_peor_g.get("kg_rest") or 0)
-                    except Exception:
-                        _kg_g = 0.0
-                    if _dias_g <= 0:
-                        _col_sem = "#E13B3B"
-                        _txt_sem = "#A32D2D"
-                        _bg_sem = "#FCEBEB"
-                        _estado_g = "Reponer HOY"
-                    elif _dias_g <= 7:
-                        _col_sem = "#E89938"
-                        _txt_sem = "#BA7517"
-                        _bg_sem = "#FAEEDA"
-                        _estado_g = f"Quedan {_dias_g:.0f} días"
+                        _lotes_g = []
+                    _n_anim_g = 0
+                    for _lt_g in _lotes_g:
+                        # Cantidad real: cantidad_inicial +/- movimientos.
+                        # (La columna "cantidad" no existe en lotes — el
+                        # bug de la etapa 1 mostraba siempre 0 animales.)
+                        try:
+                            _n_anim_g += int(
+                                db.cantidad_vigente_lote(_lt_g["id"]) or 0
+                            )
+                        except Exception:
+                            try:
+                                _n_anim_g += int(
+                                    _lt_g.get("cantidad_inicial") or 0
+                                )
+                            except Exception:
+                                pass
+                    if len(_lotes_g) == 1:
+                        _cat_g = (
+                            _lotes_g[0].get("identificador")
+                            or str(
+                                _lotes_g[0].get("categoria") or "Lote"
+                            ).replace("_", " ").title()
+                        )
+                        _linea_lote_g = (
+                            f"{_cat_g} · {_n_anim_g} animales"
+                        )
+                    elif len(_lotes_g) > 1:
+                        _linea_lote_g = (
+                            f"{len(_lotes_g)} lotes · "
+                            f"{_n_anim_g} animales"
+                        )
                     else:
-                        _col_sem = "#5BAE7D"
-                        _txt_sem = "#0F6E56"
-                        _bg_sem = "#E1F5EE"
-                        _estado_g = f"OK · {_dias_g:.0f} días"
-                    _pct_g = min(
-                        100.0, max(0.0, _dias_g / 14.0 * 100.0),
-                    )
-                    _footer_der_g = (
-                        f"{_prod_g} · {_kg_g:.0f} kg"
-                    )
-                else:
-                    _col_sem = "#B9BDC3"
-                    _txt_sem = "#8a8f98"
-                    _bg_sem = "#ECEDEF"
-                    _estado_g = "Sin datos de stock"
-                    _pct_g = 0.0
-                    _footer_der_g = "—"
+                        _linea_lote_g = "Sin lotes activos"
+                    # Iniciales para el avatar
+                    _partes_nom_g = [p for p in _nom_g.split() if p]
+                    _inic_g = "".join(
+                        p[0] for p in _partes_nom_g[:2]
+                    ).upper() or "?"
 
-                _cards_grid.append(
-                    '<div style="border-radius:10px;'
-                    'border:1px solid rgba(128,128,128,0.25);'
-                    f'border-top:3px solid {_col_sem};'
-                    'background:rgba(128,128,128,0.06);'
-                    'padding:10px 12px;">'
-                    '<div style="display:flex;align-items:center;'
-                    'gap:8px;">'
-                    '<div style="width:30px;height:30px;'
-                    f'border-radius:50%;background:{_bg_sem};'
-                    f'color:{_txt_sem};font-size:12px;'
-                    'font-weight:700;display:flex;'
-                    'align-items:center;justify-content:center;'
-                    f'flex-shrink:0;">{_inic_g}</div>'
-                    '<div style="min-width:0;">'
-                    '<div style="font-size:13.5px;font-weight:700;'
-                    f'line-height:1.2;">{_nom_g}</div>'
-                    '<div style="font-size:11px;color:#8a8f98;">'
-                    f'{_loc_g or "&nbsp;"}</div>'
-                    '</div></div>'
-                    '<div style="font-size:11.5px;color:#8a8f98;'
-                    f'margin-top:8px;">{_linea_lote_g}</div>'
-                    '<div style="background:rgba(128,128,128,0.18);'
-                    'height:7px;border-radius:4px;margin-top:6px;'
-                    'overflow:hidden;">'
-                    f'<div style="background:{_col_sem};'
-                    f'height:100%;width:{_pct_g:.0f}%;'
-                    'border-radius:4px;"></div></div>'
-                    '<div style="display:flex;'
-                    'justify-content:space-between;'
-                    'align-items:baseline;margin-top:6px;gap:6px;">'
-                    '<span style="font-size:12px;font-weight:700;'
-                    f'color:{_txt_sem};">{_estado_g}</span>'
-                    '<span style="font-size:11px;color:#8a8f98;'
-                    f'text-align:right;">{_footer_der_g}</span>'
-                    '</div></div>'
-                )
+                    if _items_g:
+                        try:
+                            _peor_g = min(
+                                _items_g,
+                                key=lambda x: float(x.get("dias") or 0),
+                            )
+                        except Exception:
+                            _peor_g = _items_g[0]
+                        try:
+                            _dias_g = float(_peor_g.get("dias") or 0)
+                        except Exception:
+                            _dias_g = 0.0
+                        _prod_g = _peor_g.get("producto") or "—"
+                        try:
+                            _kg_g = float(_peor_g.get("kg_rest") or 0)
+                        except Exception:
+                            _kg_g = 0.0
+                        if _dias_g <= 0:
+                            _col_sem = "#E13B3B"
+                            _txt_sem = "#A32D2D"
+                            _bg_sem = "#FCEBEB"
+                            _estado_g = "Reponer HOY"
+                        elif _dias_g <= 7:
+                            _col_sem = "#E89938"
+                            _txt_sem = "#BA7517"
+                            _bg_sem = "#FAEEDA"
+                            _estado_g = f"Quedan {_dias_g:.0f} días"
+                        else:
+                            _col_sem = "#5BAE7D"
+                            _txt_sem = "#0F6E56"
+                            _bg_sem = "#E1F5EE"
+                            _estado_g = f"OK · {_dias_g:.0f} días"
+                        _pct_g = min(
+                            100.0, max(0.0, _dias_g / 14.0 * 100.0),
+                        )
+                        _footer_der_g = (
+                            f"{_prod_g} · {_kg_g:.0f} kg"
+                        )
+                    else:
+                        _col_sem = "#B9BDC3"
+                        _txt_sem = "#8a8f98"
+                        _bg_sem = "#ECEDEF"
+                        _estado_g = "Sin datos de stock"
+                        _pct_g = 0.0
+                        _footer_der_g = "—"
 
-            if _cards_grid:
-                st.markdown(
-                    '<div style="display:flex;'
-                    'justify-content:space-between;'
-                    'align-items:baseline;flex-wrap:wrap;gap:6px;'
-                    'margin-bottom:8px;">'
-                    '<span style="font-size:12px;font-weight:700;'
-                    'letter-spacing:0.08em;color:#8a8f98;">'
-                    'MIS CLIENTES</span>'
-                    '<span style="font-size:11px;color:#8a8f98;">'
-                    '<span style="color:#E13B3B;">●</span> '
-                    'reponer hoy · '
-                    '<span style="color:#E89938;">●</span> '
-                    'esta semana · '
-                    '<span style="color:#5BAE7D;">●</span> OK'
-                    '</span></div>'
-                    '<div style="display:grid;'
-                    'grid-template-columns:'
-                    'repeat(auto-fit,minmax(210px,1fr));'
-                    'gap:10px;">'
-                    + "".join(_cards_grid)
-                    + '</div>',
-                    unsafe_allow_html=True,
-                )
+                    _cards_grid.append(
+                        '<div style="border-radius:10px;'
+                        'border:1px solid rgba(128,128,128,0.25);'
+                        f'border-top:3px solid {_col_sem};'
+                        'background:rgba(128,128,128,0.06);'
+                        'padding:10px 12px;">'
+                        '<div style="display:flex;align-items:center;'
+                        'gap:8px;">'
+                        '<div style="width:30px;height:30px;'
+                        f'border-radius:50%;background:{_bg_sem};'
+                        f'color:{_txt_sem};font-size:12px;'
+                        'font-weight:700;display:flex;'
+                        'align-items:center;justify-content:center;'
+                        f'flex-shrink:0;">{_inic_g}</div>'
+                        '<div style="min-width:0;">'
+                        '<div style="font-size:13.5px;font-weight:700;'
+                        f'line-height:1.2;">{_nom_g}</div>'
+                        '<div style="font-size:11px;color:#8a8f98;">'
+                        f'{_loc_g or "&nbsp;"}</div>'
+                        '</div></div>'
+                        '<div style="font-size:11.5px;color:#8a8f98;'
+                        f'margin-top:8px;">{_linea_lote_g}</div>'
+                        '<div style="background:rgba(128,128,128,0.18);'
+                        'height:7px;border-radius:4px;margin-top:6px;'
+                        'overflow:hidden;">'
+                        f'<div style="background:{_col_sem};'
+                        f'height:100%;width:{_pct_g:.0f}%;'
+                        'border-radius:4px;"></div></div>'
+                        '<div style="display:flex;'
+                        'justify-content:space-between;'
+                        'align-items:baseline;margin-top:6px;gap:6px;">'
+                        '<span style="font-size:12px;font-weight:700;'
+                        f'color:{_txt_sem};">{_estado_g}</span>'
+                        '<span style="font-size:11px;color:#8a8f98;'
+                        f'text-align:right;">{_footer_der_g}</span>'
+                        '</div></div>'
+                    )
+
+                if _cards_grid:
+                    st.markdown(
+                        '<div style="display:flex;'
+                        'justify-content:space-between;'
+                        'align-items:baseline;flex-wrap:wrap;gap:6px;'
+                        'margin-bottom:8px;">'
+                        '<span style="font-size:12px;font-weight:700;'
+                        'letter-spacing:0.08em;color:#8a8f98;">'
+                        'MIS CLIENTES</span>'
+                        '<span style="font-size:11px;color:#8a8f98;">'
+                        '<span style="color:#E13B3B;">●</span> '
+                        'reponer hoy · '
+                        '<span style="color:#E89938;">●</span> '
+                        'esta semana · '
+                        '<span style="color:#5BAE7D;">●</span> OK'
+                        '</span></div>'
+                        '<div style="display:grid;'
+                        'grid-template-columns:'
+                        'repeat(auto-fit,minmax(210px,1fr));'
+                        'gap:10px;">'
+                        + "".join(_cards_grid)
+                        + '</div>',
+                        unsafe_allow_html=True,
+                    )
         except Exception:
             pass
 
@@ -3999,305 +4272,310 @@ with tab_inicio:
                     "fecha_agot": _proy["fecha_agotamiento"],
                 })
             if _silos_dash:
-                # Ordenar por urgencia (menos días primero)
-                _silos_dash.sort(key=lambda x: x["dias_restantes"])
-                st.markdown(
-                    "##### 🛢️ Autonomía del silocomedero por lote"
-                )
-                st.caption(
-                    "Cuándo se va a agotar la carga actual del "
-                    "silocomedero, según consumo diario de la dieta "
-                    "vigente × cantidad de animales. Sirve para "
-                    "planificar la próxima carga. "
-                    "Escala fija **0 → 60 días**. "
-                    "🔴 urgente (≤2d) · 🟠 esta semana (3-5d) · "
-                    "🟡 próximas 2 semanas (6-14d) · "
-                    "🟢 tranquilo (>14d)."
-                )
-
-                from datetime import datetime as _dt_sil
-                _ESCALA_MAX_SILO = 60
-                for _s in _silos_dash:
-                    _d = _s["dias_restantes"]
-                    _pct_s = min(100.0, max(
-                        0.0, _d / _ESCALA_MAX_SILO * 100,
-                    ))
-                    # Color según urgencia (silocomedero suele tener
-                    # ventanas más cortas que el stock de producto)
-                    if _d <= 2:
-                        _emoji_s = "🔴"
-                        _color_bar_s = "#E13B3B"
-                        _color_txt_s = "#A32D2D"
-                    elif _d <= 5:
-                        _emoji_s = "🟠"
-                        _color_bar_s = "#E89938"
-                        _color_txt_s = "#854F0B"
-                    elif _d <= 14:
-                        _emoji_s = "🟡"
-                        _color_bar_s = "#D9C84C"
-                        _color_txt_s = "#7A6A0F"
-                    else:
-                        _emoji_s = "🟢"
-                        _color_bar_s = "#5BAE7D"
-                        _color_txt_s = "#0F6E56"
-
-                    try:
-                        _fa_show = _dt_sil.strptime(
-                            _s["fecha_agot"], "%Y-%m-%d"
-                        ).strftime("%d/%m/%y")
-                    except Exception:
-                        _fa_show = _s["fecha_agot"]
-                    try:
-                        _fc_show = _dt_sil.strptime(
-                            _s["fecha_carga"], "%Y-%m-%d"
-                        ).strftime("%d/%m/%y")
-                    except Exception:
-                        _fc_show = _s["fecha_carga"]
-
-                    _col_lbl_s, _col_bar_s, _col_dat_s = st.columns(
-                        [3, 4, 2]
+                with _cont_silo, st.expander(
+                    f"🍽️ Autonomía del silocomedero "
+                    f"({len(_silos_dash)} lote(s))",
+                    expanded=False,
+                ):
+                    # Ordenar por urgencia (menos días primero)
+                    _silos_dash.sort(key=lambda x: x["dias_restantes"])
+                    st.markdown(
+                        "##### 🛢️ Autonomía del silocomedero por lote"
                     )
-                    with _col_lbl_s:
-                        st.markdown(
-                            f"**{_s['cliente']}** · {_s['lote']}"
-                        )
-                        st.caption(
-                            f"{_emoji_s} cargado {_fc_show}: "
-                            f"{_s['kg_cargados']:.0f} kg · "
-                            f"consumo {_s['consumo_dia']:.0f} kg/día"
-                        )
-                    with _col_bar_s:
-                        # Marcas verticales en 7, 14, 30 días sobre
-                        # escala 0-60.
-                        _m7s = 7 / _ESCALA_MAX_SILO * 100
-                        _m14s = 14 / _ESCALA_MAX_SILO * 100
-                        _m30s = 30 / _ESCALA_MAX_SILO * 100
-                        _lab_in_s = (
-                            f"{_d:.0f}d" if _pct_s >= 18 else ""
-                        )
-                        _lab_out_s = (
-                            f"{_d:.0f}d" if _pct_s < 18 else ""
-                        )
-                        _barra_silo = (
-                            f'<div style="display:flex;'
-                            f'align-items:center;gap:6px;'
-                            f'margin-top:10px;">'
-                            f'<div style="position:relative;flex:1;'
-                            f'background:#F0F0F0;border-radius:6px;'
-                            f'height:22px;overflow:hidden;">'
-                            f'<div style="position:absolute;'
-                            f'left:{_m7s}%;top:0;bottom:0;width:1px;'
-                            f'background:rgba(0,0,0,0.18);'
-                            f'z-index:2;"></div>'
-                            f'<div style="position:absolute;'
-                            f'left:{_m14s}%;top:0;bottom:0;width:1px;'
-                            f'background:rgba(0,0,0,0.18);'
-                            f'z-index:2;"></div>'
-                            f'<div style="position:absolute;'
-                            f'left:{_m30s}%;top:0;bottom:0;width:1px;'
-                            f'background:rgba(0,0,0,0.18);'
-                            f'z-index:2;"></div>'
-                            f'<div style="background:{_color_bar_s};'
-                            f'height:100%;width:{_pct_s}%;'
-                            f'border-radius:6px 0 0 6px;z-index:1;'
-                            f'position:relative;display:flex;'
-                            f'align-items:center;padding-left:8px;'
-                            f'color:white;font-size:12px;'
-                            f'font-weight:600;white-space:nowrap;">'
-                            f'{_lab_in_s}</div>'
-                            f'</div>'
-                            f'<span style="color:{_color_txt_s};'
-                            f'font-size:12px;font-weight:600;'
-                            f'min-width:30px;">{_lab_out_s}</span>'
-                            f'</div>'
-                            f'<div style="display:flex;'
-                            f'justify-content:space-between;'
-                            f'font-size:10px;color:#999;'
-                            f'margin-top:2px;padding:0 2px;">'
-                            f'<span>0</span>'
-                            f'<span style="margin-left:-8px;">7d</span>'
-                            f'<span style="margin-left:8px;">14d</span>'
-                            f'<span>30d</span>'
-                            f'<span>60d+</span>'
-                            f'</div>'
-                        )
-                        st.markdown(
-                            _barra_silo, unsafe_allow_html=True,
-                        )
-                    with _col_dat_s:
-                        st.markdown(
-                            f"<div style='text-align:right;"
-                            f"margin-top:10px;'>"
-                            f"<strong>{_s['kg_restantes']:.0f} kg"
-                            f"</strong>"
-                            f"<br><span style='color:{_color_txt_s};"
-                            f"font-size:13px;'>"
-                            f"se agota {_fa_show}"
-                            f"</span></div>",
-                            unsafe_allow_html=True,
-                        )
-                st.divider()
-
-            # ── Cronograma de próximas entregas + productos top ──
-            _col_crono, _col_prods = st.columns(2)
-
-            with _col_crono:
-                st.markdown(
-                    "##### 📅 Próximas entregas estimadas"
-                )
-                _items_crono = [
-                    a for a in _autonomia_por_cliente_lote
-                    if a.get("fecha_agot") and a["kg_rest"] > 0
-                ]
-                _items_crono.sort(
-                    key=lambda x: x["fecha_agot"] or "9999"
-                )
-                if not _items_crono:
                     st.caption(
-                        "Sin proyecciones de agotamiento "
-                        "todavía."
+                        "Cuándo se va a agotar la carga actual del "
+                        "silocomedero, según consumo diario de la dieta "
+                        "vigente × cantidad de animales. Sirve para "
+                        "planificar la próxima carga. "
+                        "Escala fija **0 → 60 días**. "
+                        "🔴 urgente (≤2d) · 🟠 esta semana (3-5d) · "
+                        "🟡 próximas 2 semanas (6-14d) · "
+                        "🟢 tranquilo (>14d)."
                     )
-                else:
-                    _esta_sem = []
-                    _prox_sem = []
-                    _mas = []
-                    for it in _items_crono[:8]:
+
+                    from datetime import datetime as _dt_sil
+                    _ESCALA_MAX_SILO = 60
+                    for _s in _silos_dash:
+                        _d = _s["dias_restantes"]
+                        _pct_s = min(100.0, max(
+                            0.0, _d / _ESCALA_MAX_SILO * 100,
+                        ))
+                        # Color según urgencia (silocomedero suele tener
+                        # ventanas más cortas que el stock de producto)
+                        if _d <= 2:
+                            _emoji_s = "🔴"
+                            _color_bar_s = "#E13B3B"
+                            _color_txt_s = "#A32D2D"
+                        elif _d <= 5:
+                            _emoji_s = "🟠"
+                            _color_bar_s = "#E89938"
+                            _color_txt_s = "#854F0B"
+                        elif _d <= 14:
+                            _emoji_s = "🟡"
+                            _color_bar_s = "#D9C84C"
+                            _color_txt_s = "#7A6A0F"
+                        else:
+                            _emoji_s = "🟢"
+                            _color_bar_s = "#5BAE7D"
+                            _color_txt_s = "#0F6E56"
+
                         try:
-                            _f = datetime.strptime(
-                                it["fecha_agot"], "%Y-%m-%d",
-                            ).date()
-                            _d = (_f - _hoy_log).days
-                            if _d <= 7:
-                                _esta_sem.append((it, _f, _d))
-                            elif _d <= 14:
-                                _prox_sem.append((it, _f, _d))
-                            else:
-                                _mas.append((it, _f, _d))
+                            _fa_show = _dt_sil.strptime(
+                                _s["fecha_agot"], "%Y-%m-%d"
+                            ).strftime("%d/%m/%y")
                         except Exception:
-                            continue
-                    if _esta_sem:
-                        st.caption("Esta semana")
-                        for it, _f, _d in _esta_sem:
-                            st.markdown(
-                                f"<div style='border-left:3px solid "
-                                f"#E24B4A; padding:6px 10px; "
-                                f"margin-bottom:6px; "
-                                f"background:rgba(226,75,74,0.06);"
-                                f"font-size:13px;'>"
-                                f"<strong>{it['cliente']}</strong>"
-                                f" · {it['producto']}"
-                                f" · {_f.strftime('%a %d/%m')}"
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
-                    if _prox_sem:
-                        st.caption("Próxima semana")
-                        for it, _f, _d in _prox_sem:
-                            st.markdown(
-                                f"<div style='border-left:3px solid "
-                                f"#EF9F27; padding:6px 10px; "
-                                f"margin-bottom:6px; "
-                                f"background:rgba(239,159,39,0.06);"
-                                f"font-size:13px;'>"
-                                f"<strong>{it['cliente']}</strong>"
-                                f" · {it['producto']}"
-                                f" · {_f.strftime('%a %d/%m')}"
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
-                    if _mas:
-                        st.caption("Más adelante")
-                        for it, _f, _d in _mas[:3]:
-                            st.markdown(
-                                f"<div style='border-left:3px solid "
-                                f"#1D9E75; padding:6px 10px; "
-                                f"margin-bottom:6px; "
-                                f"background:rgba(29,158,117,0.06);"
-                                f"font-size:13px;'>"
-                                f"<strong>{it['cliente']}</strong>"
-                                f" · {it['producto']}"
-                                f" · {_f.strftime('%d/%m')}"
-                                f" ({_d}d)"
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
+                            _fa_show = _s["fecha_agot"]
+                        try:
+                            _fc_show = _dt_sil.strptime(
+                                _s["fecha_carga"], "%Y-%m-%d"
+                            ).strftime("%d/%m/%y")
+                        except Exception:
+                            _fc_show = _s["fecha_carga"]
 
-            with _col_prods:
-                st.markdown(
-                    "##### 📦 Producto entregado · últimos 30 días"
-                )
-                from collections import defaultdict
-                _por_prod = defaultdict(float)
-                from datetime import timedelta as _td30
-                _hace30 = (_hoy_log - _td30(days=30)).isoformat()
-                try:
-                    _ent_30d = db.listar_entregas_periodo(
-                        _hace30, _hoy_log.isoformat(),
-                    )
-                except Exception:
-                    _ent_30d = []
-                for e in _ent_30d:
-                    _por_prod[
-                        e.get("producto_nombre", "")
-                    ] += e.get("kg_total") or 0
-                if not _por_prod:
-                    st.caption(
-                        "Sin entregas registradas en los últimos "
-                        "30 días."
-                    )
-                else:
-                    _max_prod = max(_por_prod.values()) or 1
-                    _items_prod = sorted(
-                        _por_prod.items(), key=lambda x: -x[1],
-                    )
-                    for nom, kg in _items_prod[:6]:
-                        _pct_p = kg / _max_prod * 100
-                        st.markdown(
-                            f"<div style='font-size:13px; "
-                            f"margin-bottom:4px;'>"
-                            f"<div style='display:flex; "
-                            f"justify-content:space-between;'>"
-                            f"<span>{nom}</span>"
-                            f"<span style='color:#5F5E5A;'>"
-                            f"{kg:.0f} kg</span></div>"
-                            f"<div style='background:#F1EFE8; "
-                            f"height:6px; border-radius:3px;"
-                            f"margin-top:3px;'>"
-                            f"<div style='background:#0F6E56; "
-                            f"height:100%; width:{_pct_p:.0f}%;"
-                            f"border-radius:3px;'></div></div>"
-                            f"</div>",
-                            unsafe_allow_html=True,
+                        _col_lbl_s, _col_bar_s, _col_dat_s = st.columns(
+                            [3, 4, 2]
                         )
+                        with _col_lbl_s:
+                            st.markdown(
+                                f"**{_s['cliente']}** · {_s['lote']}"
+                            )
+                            st.caption(
+                                f"{_emoji_s} cargado {_fc_show}: "
+                                f"{_s['kg_cargados']:.0f} kg · "
+                                f"consumo {_s['consumo_dia']:.0f} kg/día"
+                            )
+                        with _col_bar_s:
+                            # Marcas verticales en 7, 14, 30 días sobre
+                            # escala 0-60.
+                            _m7s = 7 / _ESCALA_MAX_SILO * 100
+                            _m14s = 14 / _ESCALA_MAX_SILO * 100
+                            _m30s = 30 / _ESCALA_MAX_SILO * 100
+                            _lab_in_s = (
+                                f"{_d:.0f}d" if _pct_s >= 18 else ""
+                            )
+                            _lab_out_s = (
+                                f"{_d:.0f}d" if _pct_s < 18 else ""
+                            )
+                            _barra_silo = (
+                                f'<div style="display:flex;'
+                                f'align-items:center;gap:6px;'
+                                f'margin-top:10px;">'
+                                f'<div style="position:relative;flex:1;'
+                                f'background:#F0F0F0;border-radius:6px;'
+                                f'height:22px;overflow:hidden;">'
+                                f'<div style="position:absolute;'
+                                f'left:{_m7s}%;top:0;bottom:0;width:1px;'
+                                f'background:rgba(0,0,0,0.18);'
+                                f'z-index:2;"></div>'
+                                f'<div style="position:absolute;'
+                                f'left:{_m14s}%;top:0;bottom:0;width:1px;'
+                                f'background:rgba(0,0,0,0.18);'
+                                f'z-index:2;"></div>'
+                                f'<div style="position:absolute;'
+                                f'left:{_m30s}%;top:0;bottom:0;width:1px;'
+                                f'background:rgba(0,0,0,0.18);'
+                                f'z-index:2;"></div>'
+                                f'<div style="background:{_color_bar_s};'
+                                f'height:100%;width:{_pct_s}%;'
+                                f'border-radius:6px 0 0 6px;z-index:1;'
+                                f'position:relative;display:flex;'
+                                f'align-items:center;padding-left:8px;'
+                                f'color:white;font-size:12px;'
+                                f'font-weight:600;white-space:nowrap;">'
+                                f'{_lab_in_s}</div>'
+                                f'</div>'
+                                f'<span style="color:{_color_txt_s};'
+                                f'font-size:12px;font-weight:600;'
+                                f'min-width:30px;">{_lab_out_s}</span>'
+                                f'</div>'
+                                f'<div style="display:flex;'
+                                f'justify-content:space-between;'
+                                f'font-size:10px;color:#999;'
+                                f'margin-top:2px;padding:0 2px;">'
+                                f'<span>0</span>'
+                                f'<span style="margin-left:-8px;">7d</span>'
+                                f'<span style="margin-left:8px;">14d</span>'
+                                f'<span>30d</span>'
+                                f'<span>60d+</span>'
+                                f'</div>'
+                            )
+                            st.markdown(
+                                _barra_silo, unsafe_allow_html=True,
+                            )
+                        with _col_dat_s:
+                            st.markdown(
+                                f"<div style='text-align:right;"
+                                f"margin-top:10px;'>"
+                                f"<strong>{_s['kg_restantes']:.0f} kg"
+                                f"</strong>"
+                                f"<br><span style='color:{_color_txt_s};"
+                                f"font-size:13px;'>"
+                                f"se agota {_fa_show}"
+                                f"</span></div>",
+                                unsafe_allow_html=True,
+                            )
 
-        st.divider()
+            with _exp_logistica:
+                # ── Cronograma de próximas entregas + productos top ──
+                _col_crono, _col_prods = st.columns(2)
+
+                with _col_crono:
+                    st.markdown(
+                        "##### 📅 Próximas entregas estimadas"
+                    )
+                    _items_crono = [
+                        a for a in _autonomia_por_cliente_lote
+                        if a.get("fecha_agot") and a["kg_rest"] > 0
+                    ]
+                    _items_crono.sort(
+                        key=lambda x: x["fecha_agot"] or "9999"
+                    )
+                    if not _items_crono:
+                        st.caption(
+                            "Sin proyecciones de agotamiento "
+                            "todavía."
+                        )
+                    else:
+                        _esta_sem = []
+                        _prox_sem = []
+                        _mas = []
+                        for it in _items_crono[:8]:
+                            try:
+                                _f = datetime.strptime(
+                                    it["fecha_agot"], "%Y-%m-%d",
+                                ).date()
+                                _d = (_f - _hoy_log).days
+                                if _d <= 7:
+                                    _esta_sem.append((it, _f, _d))
+                                elif _d <= 14:
+                                    _prox_sem.append((it, _f, _d))
+                                else:
+                                    _mas.append((it, _f, _d))
+                            except Exception:
+                                continue
+                        if _esta_sem:
+                            st.caption("Esta semana")
+                            for it, _f, _d in _esta_sem:
+                                st.markdown(
+                                    f"<div style='border-left:3px solid "
+                                    f"#E24B4A; padding:6px 10px; "
+                                    f"margin-bottom:6px; "
+                                    f"background:rgba(226,75,74,0.06);"
+                                    f"font-size:13px;'>"
+                                    f"<strong>{it['cliente']}</strong>"
+                                    f" · {it['producto']}"
+                                    f" · {_f.strftime('%a %d/%m')}"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
+                        if _prox_sem:
+                            st.caption("Próxima semana")
+                            for it, _f, _d in _prox_sem:
+                                st.markdown(
+                                    f"<div style='border-left:3px solid "
+                                    f"#EF9F27; padding:6px 10px; "
+                                    f"margin-bottom:6px; "
+                                    f"background:rgba(239,159,39,0.06);"
+                                    f"font-size:13px;'>"
+                                    f"<strong>{it['cliente']}</strong>"
+                                    f" · {it['producto']}"
+                                    f" · {_f.strftime('%a %d/%m')}"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
+                        if _mas:
+                            st.caption("Más adelante")
+                            for it, _f, _d in _mas[:3]:
+                                st.markdown(
+                                    f"<div style='border-left:3px solid "
+                                    f"#1D9E75; padding:6px 10px; "
+                                    f"margin-bottom:6px; "
+                                    f"background:rgba(29,158,117,0.06);"
+                                    f"font-size:13px;'>"
+                                    f"<strong>{it['cliente']}</strong>"
+                                    f" · {it['producto']}"
+                                    f" · {_f.strftime('%d/%m')}"
+                                    f" ({_d}d)"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                with _col_prods:
+                    st.markdown(
+                        "##### 📦 Producto entregado · últimos 30 días"
+                    )
+                    from collections import defaultdict
+                    _por_prod = defaultdict(float)
+                    from datetime import timedelta as _td30
+                    _hace30 = (_hoy_log - _td30(days=30)).isoformat()
+                    try:
+                        _ent_30d = db.listar_entregas_periodo(
+                            _hace30, _hoy_log.isoformat(),
+                        )
+                    except Exception:
+                        _ent_30d = []
+                    for e in _ent_30d:
+                        _por_prod[
+                            e.get("producto_nombre", "")
+                        ] += e.get("kg_total") or 0
+                    if not _por_prod:
+                        st.caption(
+                            "Sin entregas registradas en los últimos "
+                            "30 días."
+                        )
+                    else:
+                        _max_prod = max(_por_prod.values()) or 1
+                        _items_prod = sorted(
+                            _por_prod.items(), key=lambda x: -x[1],
+                        )
+                        for nom, kg in _items_prod[:6]:
+                            _pct_p = kg / _max_prod * 100
+                            st.markdown(
+                                f"<div style='font-size:13px; "
+                                f"margin-bottom:4px;'>"
+                                f"<div style='display:flex; "
+                                f"justify-content:space-between;'>"
+                                f"<span>{nom}</span>"
+                                f"<span style='color:#5F5E5A;'>"
+                                f"{kg:.0f} kg</span></div>"
+                                f"<div style='background:#F1EFE8; "
+                                f"height:6px; border-radius:3px;"
+                                f"margin-top:3px;'>"
+                                f"<div style='background:#0F6E56; "
+                                f"height:100%; width:{_pct_p:.0f}%;"
+                                f"border-radius:3px;'></div></div>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+
 
         # ═══════════════ ALERTAS DE STOCK (detalle) ═══════════════
         # La vista principal ahora es la grilla de tarjetas de
         # clientes de arriba; la tabla detallada queda colapsada
         # para no perder información.
-        if not _filas_log:
-            st.success(
-                "✅ Sin alertas de stock — todos los clientes con "
-                "entregas registradas tienen más de 14 días de "
-                "autonomía. Volvé a chequear durante la semana."
-            )
-        else:
-            _filas_log.sort(
-                key=lambda x: x.get("_dias_sort", 999)
-            )
-            with st.expander(
-                f"📋 Ver tabla detallada de alertas de stock "
-                f"({len(_filas_log)})",
-                expanded=False,
-            ):
-                import pandas as _pd_log
-                _df_log = _pd_log.DataFrame(_filas_log).drop(
-                    columns=["_dias_sort"], errors="ignore",
+        with _exp_logistica:
+            if not _filas_log:
+                st.success(
+                    "✅ Sin alertas de stock — todos los clientes con "
+                    "entregas registradas tienen más de 14 días de "
+                    "autonomía. Volvé a chequear durante la semana."
                 )
-                st.dataframe(
-                    _df_log, hide_index=True, width="stretch",
+            else:
+                _filas_log.sort(
+                    key=lambda x: x.get("_dias_sort", 999)
                 )
+                st.markdown(
+                    f"**📋 Tabla detallada de alertas de stock "
+                    f"({len(_filas_log)})**"
+                )
+                with st.container():
+                    import pandas as _pd_log
+                    _df_log = _pd_log.DataFrame(_filas_log).drop(
+                        columns=["_dias_sort"], errors="ignore",
+                    )
+                    st.dataframe(
+                        _df_log, hide_index=True, width="stretch",
+                    )
 
     except Exception as _e_log:
         import traceback as _tb_log
@@ -4308,140 +4586,324 @@ with tab_inicio:
         with st.expander("Ver traceback completo"):
             st.code(_tb_log.format_exc(), language="python")
 
-    st.divider()
+
+    # ═══════ Agenda de la semana + Clima que impacta ═══════
+    # Dos paneles compactos armados con data ya computada arriba
+    # (autonomía de stock, cargas de silo, recordatorios, clima).
+    try:
+        _DIAS_ES_AG = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+        _hoy_ag = datetime.now().date()
+
+        def _fmt_dia_ag(_f_ag):
+            return f"{_DIAS_ES_AG[_f_ag.weekday()]} {_f_ag.day}"
+
+        _eventos_ag = []
+        try:
+            for _a_ag in _autonomia_por_cliente_lote or []:
+                _f_raw_ag = _a_ag.get("fecha_agot")
+                if not _f_raw_ag or (_a_ag.get("kg_rest") or 0) <= 0:
+                    continue
+                _f_ag = datetime.strptime(
+                    _f_raw_ag, "%Y-%m-%d",
+                ).date()
+                if 0 <= (_f_ag - _hoy_ag).days <= 14:
+                    _eventos_ag.append((
+                        _f_ag,
+                        f"Entrega estimada "
+                        f"{_a_ag.get('cliente', '?')}",
+                    ))
+        except Exception:
+            pass
+        try:
+            for _s_ag in _silos_dash:
+                _f_ag = datetime.strptime(
+                    _s_ag.get("fecha_agot", ""), "%Y-%m-%d",
+                ).date()
+                if 0 <= (_f_ag - _hoy_ag).days <= 14:
+                    _eventos_ag.append((
+                        _f_ag,
+                        f"Fin carga silo "
+                        f"{_s_ag.get('cliente', '?')}",
+                    ))
+        except Exception:
+            pass
+        try:
+            _n_llam_ag = sum(
+                1 for _r_ag in (_recos or [])
+                if str(_r_ag.get("fecha_objetivo", ""))
+                <= _hoy_ag.isoformat()
+            )
+        except Exception:
+            _n_llam_ag = 0
+        if _n_llam_ag:
+            _eventos_ag.append((
+                _hoy_ag,
+                f"{_n_llam_ag} llamada(s) pendiente(s)",
+            ))
+        _eventos_ag.sort(key=lambda x: x[0])
+        _eventos_ag = _eventos_ag[:6]
+
+        _rows_ag_html = []
+        for _f_ag, _txt_ag in _eventos_ag:
+            if _f_ag <= _hoy_ag:
+                _rows_ag_html.append(
+                    '<div style="font-size:13px;padding:4px 8px;'
+                    'margin-bottom:3px;border-radius:6px;'
+                    'background:#E1F5EE;color:#085041;'
+                    'font-weight:600;">'
+                    f'HOY · {_txt_ag}</div>'
+                )
+            else:
+                _rows_ag_html.append(
+                    '<div style="font-size:13px;padding:4px 8px;'
+                    'margin-bottom:3px;">'
+                    f'<span style="color:#8a8f98;">'
+                    f'{_fmt_dia_ag(_f_ag)}</span> · {_txt_ag}</div>'
+                )
+        if not _rows_ag_html:
+            _rows_ag_html.append(
+                '<div style="font-size:13px;color:#8a8f98;'
+                'padding:4px 8px;">Sin eventos próximos.</div>'
+            )
+
+        _SVG_PANEL_ATTRS = (
+            "width='15' height='15' viewBox='0 0 24 24' fill='none' "
+            "stroke='currentColor' stroke-width='2' "
+            "stroke-linecap='round' stroke-linejoin='round' "
+            "style='vertical-align:-2px;'"
+        )
+        _svg_cal_ag = (
+            f"<svg {_SVG_PANEL_ATTRS}>"
+            "<rect x='3' y='4' width='18' height='18' rx='2' "
+            "ry='2'></rect>"
+            "<line x1='16' y1='2' x2='16' y2='6'></line>"
+            "<line x1='8' y1='2' x2='8' y2='6'></line>"
+            "<line x1='3' y1='10' x2='21' y2='10'></line></svg>"
+        )
+        _svg_nube_ag = (
+            f"<svg {_SVG_PANEL_ATTRS}>"
+            "<path d='M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 "
+            "0 0 0 0-10z'></path></svg>"
+        )
+
+        # Panel B: solo localidades CON alerta
+        _lineas_cl_html = []
+        try:
+            for _i_cl in (datos_clima.get("consultadas") or []):
+                _nc_cl = _i_cl.get("n_alertas_criticas") or 0
+                _nw_cl = _i_cl.get("n_alertas_warning") or 0
+                _rk_cl = _i_cl.get("severidad_real_max_rank") or 1
+                if not (_nc_cl or _nw_cl or _rk_cl >= 3):
+                    continue
+                _es_crit_cl = bool(_nc_cl) or _rk_cl >= 4
+                _col_cl_txt = "#A32D2D" if _es_crit_cl else "#BA7517"
+                _niv_cl = str(
+                    _i_cl.get("severidad_real_max") or "alerta"
+                )
+                for _e_cl in ("🔴", "🟠", "🟡", "🟢"):
+                    _niv_cl = _niv_cl.replace(_e_cl, "").strip()
+                _dia_cl = ""
+                _f_raw_cl = _i_cl.get("severidad_real_max_fecha")
+                if _f_raw_cl:
+                    try:
+                        _fd_cl = datetime.strptime(
+                            _f_raw_cl, "%Y-%m-%d",
+                        ).date()
+                        _dia_cl = (
+                            f"{_DIAS_ES_AG[_fd_cl.weekday()]}: "
+                        )
+                    except Exception:
+                        _dia_cl = ""
+                _lineas_cl_html.append(
+                    '<div style="font-size:13px;padding:4px 8px;'
+                    f'margin-bottom:3px;color:{_col_cl_txt};'
+                    'font-weight:600;">'
+                    f'{_i_cl.get("localidad", "?")} — '
+                    f'{_dia_cl}{_niv_cl}</div>'
+                )
+        except Exception:
+            pass
+        _lineas_cl_html.append(
+            '<div style="font-size:12px;color:#8a8f98;'
+            'padding:4px 8px;">'
+            + (
+                "Resto de zonas sin alertas"
+                if _lineas_cl_html
+                else "Sin alertas climáticas en ninguna zona"
+            )
+            + '</div>'
+        )
+
+        _CSS_PANEL_AG = (
+            'border:1px solid rgba(128,128,128,0.25);'
+            'border-radius:10px;padding:12px 14px;'
+            'background:rgba(128,128,128,0.04);'
+        )
+        with _cont_agenda_clima:
+            _col_ag_a, _col_ag_b = st.columns(2)
+            with _col_ag_a:
+                st.markdown(
+                    f'<div style="{_CSS_PANEL_AG}">'
+                    '<div style="font-size:12px;font-weight:700;'
+                    'letter-spacing:0.08em;color:#8a8f98;'
+                    f'margin-bottom:8px;">{_svg_cal_ag} '
+                    'AGENDA DE LA SEMANA</div>'
+                    + "".join(_rows_ag_html)
+                    + '</div>',
+                    unsafe_allow_html=True,
+                )
+            with _col_ag_b:
+                st.markdown(
+                    f'<div style="{_CSS_PANEL_AG}">'
+                    '<div style="font-size:12px;font-weight:700;'
+                    'letter-spacing:0.08em;color:#8a8f98;'
+                    f'margin-bottom:8px;">{_svg_nube_ag} '
+                    'CLIMA QUE IMPACTA</div>'
+                    + "".join(_lineas_cl_html)
+                    + '</div>',
+                    unsafe_allow_html=True,
+                )
+    except Exception:
+        pass
+
 
     # Accesos rápidos — 4 acciones DISTINTAS, no redundantes
-    st.markdown("### 🚀 ¿Qué necesitás hacer hoy?")
-    st.caption(
-        "Click en cada tarjeta para que te diga a qué pestaña ir. "
-        "Cada una sirve para algo diferente — leelas:"
-    )
-
-    qa1, qa2, qa3, qa4 = st.columns(4)
-
-    with qa1:
-        st.markdown(
-            "<div style='background:#1B3E27;color:white;border-radius:8px;"
-            "padding:14px;height:160px;'>"
-            "<h4 style='color:white;margin-top:0;'>🐄 Pesar con drone</h4>"
-            "<p style='font-size:0.85em;color:#d8e8d6;'>"
-            "Tenés un video del drone y querés saber cuántos animales "
-            "hay y cuánto pesan</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        if st.button("👉 Ir a Video drone", key="qa_drone",
-                      width="stretch"):
-            st.info(
-                "Hacé click en la pestaña **🎞️ Video 🐄** de arriba. "
-                "Ahí subís el video del drone y te procesa conteo + peso."
+    with _cont_guia:
+        with st.expander(
+            "🚀 Guía rápida — qué hacer hoy y modos de uso",
+            expanded=False,
+        ):
+            st.markdown("### 🚀 ¿Qué necesitás hacer hoy?")
+            st.caption(
+                "Click en cada tarjeta para que te diga a qué pestaña ir. "
+                "Cada una sirve para algo diferente — leelas:"
             )
 
-    with qa2:
-        st.markdown(
-            "<div style='background:#1B3E27;color:white;border-radius:8px;"
-            "padding:14px;height:160px;'>"
-            "<h4 style='color:white;margin-top:0;'>✏️ Pesada manual</h4>"
-            "<p style='font-size:0.85em;color:#d8e8d6;'>"
-            "Pesaste con balanza, manga o estimación. Cargás el dato "
-            "directo, sin video</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        if st.button("👉 Ir a Clientes/Lotes", key="qa_manual",
-                      width="stretch"):
-            st.info(
-                "Hacé click en **🏢 Clientes/Lotes** → tab Lotes → "
-                "seleccionar el lote → expander **'✏️ Cargar pesada manual'**."
+            qa1, qa2, qa3, qa4 = st.columns(4)
+
+            with qa1:
+                st.markdown(
+                    "<div style='background:#1B3E27;color:white;border-radius:8px;"
+                    "padding:14px;height:160px;'>"
+                    "<h4 style='color:white;margin-top:0;'>🐄 Pesar con drone</h4>"
+                    "<p style='font-size:0.85em;color:#d8e8d6;'>"
+                    "Tenés un video del drone y querés saber cuántos animales "
+                    "hay y cuánto pesan</p>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("👉 Ir a Video drone", key="qa_drone",
+                              width="stretch"):
+                    st.info(
+                        "Hacé click en la pestaña **🎞️ Video 🐄** de arriba. "
+                        "Ahí subís el video del drone y te procesa conteo + peso."
+                    )
+
+            with qa2:
+                st.markdown(
+                    "<div style='background:#1B3E27;color:white;border-radius:8px;"
+                    "padding:14px;height:160px;'>"
+                    "<h4 style='color:white;margin-top:0;'>✏️ Pesada manual</h4>"
+                    "<p style='font-size:0.85em;color:#d8e8d6;'>"
+                    "Pesaste con balanza, manga o estimación. Cargás el dato "
+                    "directo, sin video</p>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("👉 Ir a Clientes/Lotes", key="qa_manual",
+                              width="stretch"):
+                    st.info(
+                        "Hacé click en **🏢 Clientes/Lotes** → tab Lotes → "
+                        "seleccionar el lote → expander **'✏️ Cargar pesada manual'**."
+                    )
+
+            with qa3:
+                st.markdown(
+                    "<div style='background:#8BC53F;color:#1B3E27;border-radius:8px;"
+                    "padding:14px;height:160px;'>"
+                    "<h4 style='color:#1B3E27;margin-top:0;'>🤖 Asesor IA</h4>"
+                    "<p style='font-size:0.85em;'>"
+                    "Consultar al asesor experto: dieta, diagnóstico, manejo, "
+                    "informes para el productor</p>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("👉 Ir a Asesor IA", key="qa_ia",
+                              width="stretch"):
+                    st.info(
+                        "Hacé click en **🤖 Asesor IA 🍽️** de arriba. "
+                        "El agente formula dietas, diagnostica problemas y "
+                        "te genera informes en PDF."
+                    )
+
+            with qa4:
+                st.markdown(
+                    "<div style='background:#1B3E27;color:white;border-radius:8px;"
+                    "padding:14px;height:160px;'>"
+                    "<h4 style='color:white;margin-top:0;'>📚 Ver historial</h4>"
+                    "<p style='font-size:0.85em;color:#d8e8d6;'>"
+                    "Pesadas anteriores, dietas previas, evolución de ADG por "
+                    "cliente y por lote</p>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("👉 Ir a Historial", key="qa_hist",
+                              width="stretch"):
+                    st.info(
+                        "Hacé click en **📚 Historial** de arriba. "
+                        "Seleccionás cliente y lote, ves toda la evolución."
+                    )
+
+            st.caption(
+                f"💡 Las pestañas marcadas con 🐄 son del **módulo Drone**, "
+                f"las 🍽️ del **módulo Asesor Nutricional**."
             )
 
-    with qa3:
-        st.markdown(
-            "<div style='background:#8BC53F;color:#1B3E27;border-radius:8px;"
-            "padding:14px;height:160px;'>"
-            "<h4 style='color:#1B3E27;margin-top:0;'>🤖 Asesor IA</h4>"
-            "<p style='font-size:0.85em;'>"
-            "Consultar al asesor experto: dieta, diagnóstico, manejo, "
-            "informes para el productor</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        if st.button("👉 Ir a Asesor IA", key="qa_ia",
-                      width="stretch"):
-            st.info(
-                "Hacé click en **🤖 Asesor IA 🍽️** de arriba. "
-                "El agente formula dietas, diagnostica problemas y "
-                "te genera informes en PDF."
+            st.divider()
+            st.markdown(
+                "### 🎯 Modos de uso por cliente\n"
+                "El sistema soporta clientes con distintas necesidades — usá lo que aplique:"
             )
-
-    with qa4:
-        st.markdown(
-            "<div style='background:#1B3E27;color:white;border-radius:8px;"
-            "padding:14px;height:160px;'>"
-            "<h4 style='color:white;margin-top:0;'>📚 Ver historial</h4>"
-            "<p style='font-size:0.85em;color:#d8e8d6;'>"
-            "Pesadas anteriores, dietas previas, evolución de ADG por "
-            "cliente y por lote</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        if st.button("👉 Ir a Historial", key="qa_hist",
-                      width="stretch"):
-            st.info(
-                "Hacé click en **📚 Historial** de arriba. "
-                "Seleccionás cliente y lote, ves toda la evolución."
-            )
-
-    st.caption(
-        f"💡 Las pestañas marcadas con 🐄 son del **módulo Drone**, "
-        f"las 🍽️ del **módulo Asesor Nutricional**."
-    )
-
-    st.divider()
-    st.markdown(
-        "### 🎯 Modos de uso por cliente\n"
-        "El sistema soporta clientes con distintas necesidades — usá lo que aplique:"
-    )
-    mu1, mu2, mu3 = st.columns(3)
-    with mu1:
-        st.markdown(
-            "<div style='border:1px solid #1B3E27;border-radius:8px;"
-            "padding:12px;height:160px;'>"
-            "<h4 style='color:#1B3E27;margin-top:0;'>"
-            "🐄 Cliente con DRONE</h4>"
-            "<ul style='font-size:0.9em;'>"
-            "<li>Análisis por video (Imagen/Video)</li>"
-            "<li>Conteo y peso automático</li>"
-            "<li>Asesoría nutricional</li>"
-            "<li>Tracking completo</li>"
-            "</ul></div>", unsafe_allow_html=True,
-        )
-    with mu2:
-        st.markdown(
-            "<div style='border:1px solid #1B3E27;border-radius:8px;"
-            "padding:12px;height:160px;'>"
-            "<h4 style='color:#1B3E27;margin-top:0;'>"
-            "✏️ Cliente con BALANZA</h4>"
-            "<ul style='font-size:0.9em;'>"
-            "<li>Carga manual de pesadas</li>"
-            "<li>(Clientes/Lotes → Pesada manual)</li>"
-            "<li>Asesoría nutricional</li>"
-            "<li>Tracking completo</li>"
-            "</ul></div>", unsafe_allow_html=True,
-        )
-    with mu3:
-        st.markdown(
-            "<div style='border:1px solid #1B3E27;border-radius:8px;"
-            "padding:12px;height:160px;'>"
-            "<h4 style='color:#1B3E27;margin-top:0;'>"
-            "🍽️ Cliente solo NUTRICIÓN</h4>"
-            "<ul style='font-size:0.9em;'>"
-            "<li>Sin pesadas necesarias</li>"
-            "<li>Asesor IA + dietas + clima</li>"
-            "<li>Cargás solo cliente y lote</li>"
-            "<li>Recomendaciones generales</li>"
-            "</ul></div>", unsafe_allow_html=True,
-        )
+            mu1, mu2, mu3 = st.columns(3)
+            with mu1:
+                st.markdown(
+                    "<div style='border:1px solid #1B3E27;border-radius:8px;"
+                    "padding:12px;height:160px;'>"
+                    "<h4 style='color:#1B3E27;margin-top:0;'>"
+                    "🐄 Cliente con DRONE</h4>"
+                    "<ul style='font-size:0.9em;'>"
+                    "<li>Análisis por video (Imagen/Video)</li>"
+                    "<li>Conteo y peso automático</li>"
+                    "<li>Asesoría nutricional</li>"
+                    "<li>Tracking completo</li>"
+                    "</ul></div>", unsafe_allow_html=True,
+                )
+            with mu2:
+                st.markdown(
+                    "<div style='border:1px solid #1B3E27;border-radius:8px;"
+                    "padding:12px;height:160px;'>"
+                    "<h4 style='color:#1B3E27;margin-top:0;'>"
+                    "✏️ Cliente con BALANZA</h4>"
+                    "<ul style='font-size:0.9em;'>"
+                    "<li>Carga manual de pesadas</li>"
+                    "<li>(Clientes/Lotes → Pesada manual)</li>"
+                    "<li>Asesoría nutricional</li>"
+                    "<li>Tracking completo</li>"
+                    "</ul></div>", unsafe_allow_html=True,
+                )
+            with mu3:
+                st.markdown(
+                    "<div style='border:1px solid #1B3E27;border-radius:8px;"
+                    "padding:12px;height:160px;'>"
+                    "<h4 style='color:#1B3E27;margin-top:0;'>"
+                    "🍽️ Cliente solo NUTRICIÓN</h4>"
+                    "<ul style='font-size:0.9em;'>"
+                    "<li>Sin pesadas necesarias</li>"
+                    "<li>Asesor IA + dietas + clima</li>"
+                    "<li>Cargás solo cliente y lote</li>"
+                    "<li>Recomendaciones generales</li>"
+                    "</ul></div>", unsafe_allow_html=True,
+                )
 
 
 # ----------------------- CLIENTES Y LOTES -----------------------------
