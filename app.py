@@ -1572,26 +1572,67 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header con logo si existe
-col_logo, col_title = st.columns([1, 5])
-with col_logo:
-    if Path("assets/logo.png").exists():
-        st.image("assets/logo.png", width=120)
-with col_title:
-    st.markdown(
-        "<h1 style='color:#1B3E27; margin-bottom:0;'>HMS Nutrición Animal</h1>"
-        "<p style='color:#8BC53F; font-size:1.2em; margin-top:0; font-weight:600;'>"
-        "Sistema integrado: análisis por drone + nutrición NASEM 2016 + asesor IA</p>",
-        unsafe_allow_html=True,
+# ---------------------------------------------------------------------
+# Header compacto (una franja: logo + marca | saludo + stats)
+# Visible en todas las pestañas.
+# ---------------------------------------------------------------------
+_DIAS_ES_HDR = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+_MESES_ES_HDR = ["ene", "feb", "mar", "abr", "may", "jun",
+                 "jul", "ago", "sep", "oct", "nov", "dic"]
+_ahora_hdr = datetime.now()
+_fecha_es_hdr = (
+    f"{_DIAS_ES_HDR[_ahora_hdr.weekday()]} {_ahora_hdr.day} "
+    f"{_MESES_ES_HDR[_ahora_hdr.month - 1]}"
+)
+if 6 <= _ahora_hdr.hour < 13:
+    _saludo_hdr = "Buen día"
+elif 13 <= _ahora_hdr.hour < 20:
+    _saludo_hdr = "Buenas tardes"
+else:
+    _saludo_hdr = "Buenas noches"
+
+# Conteo rápido (queries cacheadas de db); si falla, solo el saludo
+try:
+    _hdr_lotes = db.listar_lotes(estado="activo")
+    _hdr_animales = sum(
+        (l.get("cantidad_inicial", 0) or 0) for l in _hdr_lotes
+    )
+    _hdr_stats = (
+        f"{len(db.listar_clientes())} clientes · "
+        f"{len(_hdr_lotes)} lotes · {_hdr_animales:,} animales"
+    )
+except Exception:
+    _hdr_stats = ""
+
+_logo_html_hdr = ""
+_logo_path_hdr = Path("assets/logo.png")
+if _logo_path_hdr.exists():
+    import base64 as _b64_hdr
+    _logo_html_hdr = (
+        '<img src="data:image/png;base64,'
+        f'{_b64_hdr.b64encode(_logo_path_hdr.read_bytes()).decode()}" '
+        'style="width:44px;height:44px;object-fit:contain;" />'
     )
 
-st.caption(
-    "**Mauricio Suárez — Asesor Técnico Nutricional**  ·  "
-    "📍 Ruta Nacional 5, km 525, Catriló, La Pampa  ·  "
-    "☎ +54 2954 51-7407  ·  "
-    "✉ mauricio@hmsnutricionanimal.com.ar  ·  "
-    "🌐 [hmsnutricionanimal.com.ar](https://hmsnutricionanimal.com.ar)  ·  "
-    "📷 [@hmsnutricionanimal](https://instagram.com/hmsnutricionanimal)"
+st.markdown(
+    f'<div style="display:flex;flex-direction:row;'
+    f'justify-content:space-between;align-items:center;'
+    f'padding:10px 0;border-bottom:1px solid rgba(128,128,128,0.25);'
+    f'margin-bottom:8px;">'
+    f'<div style="display:flex;align-items:center;gap:10px;">'
+    f'{_logo_html_hdr}'
+    f'<div>'
+    f'<div style="font-size:18px;font-weight:600;color:#8BC53F;'
+    f'line-height:1.2;">HMS Nutrición Animal</div>'
+    f'<div style="font-size:12px;color:#8a8f98;">'
+    f'Asesoría nutricional a campo</div>'
+    f'</div></div>'
+    f'<div style="text-align:right;">'
+    f'<div style="font-size:14px;">'
+    f'{_saludo_hdr}, Mauricio · {_fecha_es_hdr}</div>'
+    f'<div style="font-size:12px;color:#8a8f98;">{_hdr_stats}</div>'
+    f'</div></div>',
+    unsafe_allow_html=True,
 )
 
 # ---------------------------------------------------------------------
@@ -1926,23 +1967,6 @@ st.markdown(
 # ----------------------------- INICIO ---------------------------------
 with tab_inicio:
     kpis = dashboard.calcular_kpis()
-
-    # Cabecera de bienvenida + resumen chico del rodeo
-    _n_cli_hdr = kpis.get("n_clientes", 0) or 0
-    _n_lot_hdr = kpis.get("n_lotes", 0) or 0
-    _n_ani_hdr = kpis.get("n_animales_total", 0) or 0
-    st.markdown(
-        f"<h2 style='color:#1B3E27;margin-bottom:0;'>"
-        f"Bienvenido, Mauricio 👋</h2>"
-        f"<p style='color:#8BC53F;font-size:1.1em;margin-top:0;"
-        f"margin-bottom:2px;'>"
-        f"Sistema integrado HMS — drone + asesor nutricional</p>"
-        f"<p style='color:#8a8f98;font-size:0.85em;margin-top:0;'>"
-        f"{_n_cli_hdr} clientes · {_n_lot_hdr} lotes · "
-        f"{_n_ani_hdr:,} animales</p>",
-        unsafe_allow_html=True,
-    )
-    st.divider()
 
     # ── Prioridades de hoy ──
     # Placeholder: las tarjetas se llenan más abajo, cuando el
@@ -16438,6 +16462,16 @@ with tab_train:
 
 # ----------------------------- AYUDA ----------------------------------
 with tab_help:
+    with st.expander("📇 Datos de contacto HMS", expanded=False):
+        st.markdown(
+            "**Mauricio Suárez — Asesor Técnico Nutricional**  ·  "
+            "📍 Ruta Nacional 5, km 525, Catriló, La Pampa  ·  "
+            "☎ +54 2954 51-7407  ·  "
+            "✉ mauricio@hmsnutricionanimal.com.ar  ·  "
+            "🌐 [hmsnutricionanimal.com.ar](https://hmsnutricionanimal.com.ar)  ·  "
+            "📷 [@hmsnutricionanimal](https://instagram.com/hmsnutricionanimal)"
+        )
+
     st.markdown(
         """
 ### Cómo usar la app
