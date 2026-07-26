@@ -1927,42 +1927,30 @@ st.markdown(
 with tab_inicio:
     kpis = dashboard.calcular_kpis()
 
-    # Cabecera de bienvenida
+    # Cabecera de bienvenida + resumen chico del rodeo
+    _n_cli_hdr = kpis.get("n_clientes", 0) or 0
+    _n_lot_hdr = kpis.get("n_lotes", 0) or 0
+    _n_ani_hdr = kpis.get("n_animales_total", 0) or 0
     st.markdown(
         f"<h2 style='color:#1B3E27;margin-bottom:0;'>"
         f"Bienvenido, Mauricio 👋</h2>"
-        f"<p style='color:#8BC53F;font-size:1.1em;margin-top:0;'>"
-        f"Sistema integrado HMS — drone + asesor nutricional</p>",
+        f"<p style='color:#8BC53F;font-size:1.1em;margin-top:0;"
+        f"margin-bottom:2px;'>"
+        f"Sistema integrado HMS — drone + asesor nutricional</p>"
+        f"<p style='color:#8a8f98;font-size:0.85em;margin-top:0;'>"
+        f"{_n_cli_hdr} clientes · {_n_lot_hdr} lotes · "
+        f"{_n_ani_hdr:,} animales</p>",
         unsafe_allow_html=True,
     )
     st.divider()
 
-    # KPIs principales
-    st.markdown("### 📊 Resumen del rodeo bajo seguimiento")
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("👥 Clientes", kpis["n_clientes"])
-    k2.metric("🐄 Lotes activos", kpis["n_lotes"])
-    k3.metric("🔢 Animales total", f"{kpis['n_animales_total']:,}")
-    if kpis["adg_promedio"]:
-        k4.metric("📈 ADG prom rodeo",
-                  f"{kpis['adg_promedio']:.3f} kg/d",
-                  f"de {len(kpis['lotes'])} lote(s)")
-    else:
-        k4.metric("📈 ADG prom rodeo", "—",
-                  "Faltan pesadas comparables")
-
-    k5, k6, k7 = st.columns(3)
-    k5.metric("📅 Pesadas último mes", kpis["n_pesadas_mes"])
-    k6.metric("🍽️ Dietas registradas mes", kpis["n_dietas_mes"])
-    if kpis["ultima_pesada"]:
-        up = kpis["ultima_pesada"]
-        k7.metric(
-            "🕒 Última pesada",
-            up.get("fecha", ""),
-            f"{up.get('_cliente','')} · {up.get('peso_promedio_kg',0):.0f} kg",
-        )
-    else:
-        k7.metric("🕒 Última pesada", "—")
+    # ── Prioridades de hoy ──
+    # Placeholder: las tarjetas se llenan más abajo, cuando el
+    # bloque de logística ya cargó/calculó los datos de stock
+    # (blob precomputado) y ya se consultó el clima. Así quedan
+    # arriba de todo sin duplicar el cálculo pesado ni romper el
+    # flujo del cache.
+    _ph_prioridades = st.empty()
 
     st.divider()
 
@@ -3568,6 +3556,128 @@ with tab_inicio:
             if _spinner_ph is not None:
                 _spinner_ph.empty()
 
+        # ═══════ Llenar "Prioridades de hoy" (placeholder) ═══════
+        # Con los datos de stock ya cargados + los recordatorios y
+        # el clima calculados más arriba en esta misma pestaña.
+        try:
+            _hoy_pri_iso = datetime.now().date().isoformat()
+            _n_pri_agotado = 0
+            _n_pri_urgente = 0
+            for _f_pri in _filas_log:
+                _urg_pri = str(_f_pri.get("Urgencia", ""))
+                try:
+                    _d_pri = float(
+                        _f_pri.get("_dias_sort", 999) or 0
+                    )
+                except Exception:
+                    _d_pri = 999.0
+                if "AGOTADO" in _urg_pri or _d_pri <= 0:
+                    _n_pri_agotado += 1
+                elif "URGENTE" in _urg_pri:
+                    _n_pri_urgente += 1
+            try:
+                _n_pri_llam = sum(
+                    1 for _r_pri in (_recos or [])
+                    if str(_r_pri.get("fecha_objetivo", ""))
+                    <= _hoy_pri_iso
+                )
+            except Exception:
+                _n_pri_llam = 0
+            try:
+                _n_pri_clima = int(n_con_alertas)
+            except Exception:
+                _n_pri_clima = None
+
+            _SVG_ATTRS = (
+                "width='18' height='18' viewBox='0 0 24 24' "
+                "fill='none' stroke='currentColor' "
+                "stroke-width='2' stroke-linecap='round' "
+                "stroke-linejoin='round'"
+            )
+            _svg_caja = (
+                f"<svg {_SVG_ATTRS}>"
+                "<path d='M21 8v13H3V8'></path>"
+                "<path d='M1 3h22v5H1z'></path>"
+                "<path d='M10 12h4'></path></svg>"
+            )
+            _svg_camion = (
+                f"<svg {_SVG_ATTRS}>"
+                "<rect x='1' y='3' width='15' height='13'></rect>"
+                "<polygon points='16 8 20 8 23 11 23 16 16 16 "
+                "16 8'></polygon>"
+                "<circle cx='5.5' cy='18.5' r='2.5'></circle>"
+                "<circle cx='18.5' cy='18.5' r='2.5'></circle>"
+                "</svg>"
+            )
+            _svg_tel = (
+                f"<svg {_SVG_ATTRS}>"
+                "<path d='M22 16.92v3a2 2 0 0 1-2.18 2 19.79 "
+                "19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 "
+                "19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 "
+                "2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 "
+                "2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 "
+                "0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 "
+                "12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z'>"
+                "</path></svg>"
+            )
+            _svg_clima = (
+                f"<svg {_SVG_ATTRS}>"
+                "<path d='M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 "
+                "0 0 0 0-10z'></path></svg>"
+            )
+
+            def _tarjeta_pri(num, label, bg, fg, svg):
+                return (
+                    '<div style="flex:1;min-width:140px;'
+                    'text-align:center;padding:14px 8px;'
+                    'border-radius:10px;'
+                    'background:rgba(128,128,128,0.06);'
+                    'border:1px solid rgba(128,128,128,0.18);">'
+                    '<div style="width:38px;height:38px;'
+                    'border-radius:50%;'
+                    f'background:{bg};color:{fg};'
+                    'display:inline-flex;align-items:center;'
+                    f'justify-content:center;">{svg}</div>'
+                    '<div style="font-size:21px;font-weight:700;'
+                    f'color:{fg};margin-top:6px;'
+                    f'line-height:1.1;">{num}</div>'
+                    '<div style="font-size:11.5px;color:#8a8f98;'
+                    f'margin-top:2px;">{label}</div>'
+                    '</div>'
+                )
+
+            _tarjetas_pri = [
+                _tarjeta_pri(
+                    _n_pri_agotado, "Stock agotado",
+                    "#FCEBEB", "#A32D2D", _svg_caja,
+                ),
+                _tarjeta_pri(
+                    _n_pri_urgente, "Entregas urgentes",
+                    "#FAEEDA", "#BA7517", _svg_camion,
+                ),
+                _tarjeta_pri(
+                    _n_pri_llam, "Llamadas pendientes",
+                    "#E6F1FB", "#185FA5", _svg_tel,
+                ),
+            ]
+            if _n_pri_clima is not None:
+                _tarjetas_pri.append(_tarjeta_pri(
+                    _n_pri_clima, "Zonas con alerta climática",
+                    "#E1F5EE", "#0F6E56", _svg_clima,
+                ))
+            _ph_prioridades.markdown(
+                '<div style="font-size:12px;font-weight:700;'
+                'letter-spacing:0.08em;color:#8a8f98;'
+                'margin-bottom:8px;">PRIORIDADES DE HOY</div>'
+                '<div style="display:flex;flex-wrap:wrap;'
+                'gap:10px;">'
+                + "".join(_tarjetas_pri)
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            pass
+
         # ═══════════════ BLOQUE VISUAL ═══════════════
         # KPIs del mes + barras de autonomía + cronograma.
         # Siempre se muestra (haya o no alertas) para dar contexto
@@ -3667,171 +3777,187 @@ with tab_inicio:
                         "con el agente IA."
                     )
 
-        # ── Barras de autonomía por cliente/lote/producto ──
+        # ── Grilla "Mis clientes" con semáforo de stock ──
+        # Reemplaza las barras de autonomía: una tarjeta por
+        # CLIENTE con el peor estado de stock entre sus lotes/
+        # productos. Los clientes sin entregas registradas también
+        # aparecen (semáforo gris, "Sin datos de stock").
+        try:
+            _auto_por_cli = {}
+            for _a_g in _autonomia_por_cliente_lote:
+                _nom_a_g = _a_g.get("cliente") or "?"
+                _auto_por_cli.setdefault(_nom_a_g, []).append(_a_g)
+
+            _clientes_grid = [
+                c for c in db.listar_clientes()
+                if (c.get("estado") or "activo") == "activo"
+            ]
+
+            def _dias_min_cli(_c_dm):
+                _its = _auto_por_cli.get(_c_dm.get("nombre"), [])
+                if not _its:
+                    return 9999.0
+                try:
+                    return min(
+                        float(x.get("dias") or 0) for x in _its
+                    )
+                except Exception:
+                    return 9999.0
+
+            _clientes_grid.sort(key=_dias_min_cli)
+
+            _cards_grid = []
+            for _c_g in _clientes_grid:
+                _nom_g = _c_g.get("nombre") or "?"
+                _loc_g = _c_g.get("localidad") or ""
+                _items_g = _auto_por_cli.get(_nom_g, [])
+                # Lotes activos del cliente (query cacheada, barata)
+                try:
+                    _lotes_g = db.listar_lotes(
+                        cliente_id=_c_g.get("id"), estado="activo",
+                    ) or []
+                except Exception:
+                    _lotes_g = []
+                _n_anim_g = 0
+                for _lt_g in _lotes_g:
+                    try:
+                        _n_anim_g += int(_lt_g.get("cantidad") or 0)
+                    except Exception:
+                        pass
+                if len(_lotes_g) == 1:
+                    _linea_lote_g = (
+                        f"{_lotes_g[0].get('categoria') or 'Lote'} · "
+                        f"{_n_anim_g} animales"
+                    )
+                elif len(_lotes_g) > 1:
+                    _linea_lote_g = (
+                        f"{len(_lotes_g)} lotes · "
+                        f"{_n_anim_g} animales"
+                    )
+                else:
+                    _linea_lote_g = "Sin lotes activos"
+                # Iniciales para el avatar
+                _partes_nom_g = [p for p in _nom_g.split() if p]
+                _inic_g = "".join(
+                    p[0] for p in _partes_nom_g[:2]
+                ).upper() or "?"
+
+                if _items_g:
+                    try:
+                        _peor_g = min(
+                            _items_g,
+                            key=lambda x: float(x.get("dias") or 0),
+                        )
+                    except Exception:
+                        _peor_g = _items_g[0]
+                    try:
+                        _dias_g = float(_peor_g.get("dias") or 0)
+                    except Exception:
+                        _dias_g = 0.0
+                    _prod_g = _peor_g.get("producto") or "—"
+                    try:
+                        _kg_g = float(_peor_g.get("kg_rest") or 0)
+                    except Exception:
+                        _kg_g = 0.0
+                    if _dias_g <= 0:
+                        _col_sem = "#E13B3B"
+                        _txt_sem = "#A32D2D"
+                        _bg_sem = "#FCEBEB"
+                        _estado_g = "Reponer HOY"
+                    elif _dias_g <= 7:
+                        _col_sem = "#E89938"
+                        _txt_sem = "#BA7517"
+                        _bg_sem = "#FAEEDA"
+                        _estado_g = f"Quedan {_dias_g:.0f} días"
+                    else:
+                        _col_sem = "#5BAE7D"
+                        _txt_sem = "#0F6E56"
+                        _bg_sem = "#E1F5EE"
+                        _estado_g = f"OK · {_dias_g:.0f} días"
+                    _pct_g = min(
+                        100.0, max(0.0, _dias_g / 14.0 * 100.0),
+                    )
+                    _footer_der_g = (
+                        f"{_prod_g} · {_kg_g:.0f} kg"
+                    )
+                else:
+                    _col_sem = "#B9BDC3"
+                    _txt_sem = "#8a8f98"
+                    _bg_sem = "#ECEDEF"
+                    _estado_g = "Sin datos de stock"
+                    _pct_g = 0.0
+                    _footer_der_g = "—"
+
+                _cards_grid.append(
+                    '<div style="border-radius:10px;'
+                    'border:1px solid rgba(128,128,128,0.25);'
+                    f'border-top:3px solid {_col_sem};'
+                    'background:rgba(128,128,128,0.06);'
+                    'padding:10px 12px;">'
+                    '<div style="display:flex;align-items:center;'
+                    'gap:8px;">'
+                    '<div style="width:30px;height:30px;'
+                    f'border-radius:50%;background:{_bg_sem};'
+                    f'color:{_txt_sem};font-size:12px;'
+                    'font-weight:700;display:flex;'
+                    'align-items:center;justify-content:center;'
+                    f'flex-shrink:0;">{_inic_g}</div>'
+                    '<div style="min-width:0;">'
+                    '<div style="font-size:13.5px;font-weight:700;'
+                    f'line-height:1.2;">{_nom_g}</div>'
+                    '<div style="font-size:11px;color:#8a8f98;">'
+                    f'{_loc_g or "&nbsp;"}</div>'
+                    '</div></div>'
+                    '<div style="font-size:11.5px;color:#8a8f98;'
+                    f'margin-top:8px;">{_linea_lote_g}</div>'
+                    '<div style="background:rgba(128,128,128,0.18);'
+                    'height:7px;border-radius:4px;margin-top:6px;'
+                    'overflow:hidden;">'
+                    f'<div style="background:{_col_sem};'
+                    f'height:100%;width:{_pct_g:.0f}%;'
+                    'border-radius:4px;"></div></div>'
+                    '<div style="display:flex;'
+                    'justify-content:space-between;'
+                    'align-items:baseline;margin-top:6px;gap:6px;">'
+                    '<span style="font-size:12px;font-weight:700;'
+                    f'color:{_txt_sem};">{_estado_g}</span>'
+                    '<span style="font-size:11px;color:#8a8f98;'
+                    f'text-align:right;">{_footer_der_g}</span>'
+                    '</div></div>'
+                )
+
+            if _cards_grid:
+                st.markdown(
+                    '<div style="display:flex;'
+                    'justify-content:space-between;'
+                    'align-items:baseline;flex-wrap:wrap;gap:6px;'
+                    'margin-bottom:8px;">'
+                    '<span style="font-size:12px;font-weight:700;'
+                    'letter-spacing:0.08em;color:#8a8f98;">'
+                    'MIS CLIENTES</span>'
+                    '<span style="font-size:11px;color:#8a8f98;">'
+                    '<span style="color:#E13B3B;">●</span> '
+                    'reponer hoy · '
+                    '<span style="color:#E89938;">●</span> '
+                    'esta semana · '
+                    '<span style="color:#5BAE7D;">●</span> OK'
+                    '</span></div>'
+                    '<div style="display:grid;'
+                    'grid-template-columns:'
+                    'repeat(auto-fit,minmax(210px,1fr));'
+                    'gap:10px;">'
+                    + "".join(_cards_grid)
+                    + '</div>',
+                    unsafe_allow_html=True,
+                )
+        except Exception:
+            pass
+
+        # ── Silocomedero + cronograma (solo si hay autonomía) ──
         if _autonomia_por_cliente_lote:
             _autonomia_por_cliente_lote.sort(
-                key=lambda x: x["dias"]
+                key=lambda x: x.get("dias") or 0
             )
-            with st.container():
-                st.markdown(
-                    "##### 📊 Autonomía de cada cliente"
-                )
-                # Leyenda explicativa de los umbrales y colores
-                st.caption(
-                    "Escala fija **0 → 60 días**. "
-                    "🔴 urgente (≤7d) · 🟠 esta semana (8-14d) · "
-                    "🟡 próximas 2 semanas (15-30d) · "
-                    "🟢 tranquilo (>30d). Las marcas grises sobre la "
-                    "barra son los umbrales de 7, 14 y 30 días."
-                )
-
-                # Escala fija para todas las barras (días)
-                _ESCALA_MAX_DIAS = 60
-                for _a in _autonomia_por_cliente_lote:
-                    _dias_a = _a["dias"]
-                    # % de la barra (capado a 100% si pasa los 60d)
-                    _pct = min(100.0, max(
-                        0.0, _dias_a / _ESCALA_MAX_DIAS * 100,
-                    ))
-                    # Color de la barra según urgencia
-                    if _dias_a <= 7:
-                        _emoji = "🔴"
-                        _color_bar = "#E13B3B"     # rojo
-                        _color_txt = "#A32D2D"
-                    elif _dias_a <= 14:
-                        _emoji = "🟠"
-                        _color_bar = "#E89938"     # naranja
-                        _color_txt = "#854F0B"
-                    elif _dias_a <= 30:
-                        _emoji = "🟡"
-                        _color_bar = "#D9C84C"     # amarillo
-                        _color_txt = "#7A6A0F"
-                    else:
-                        _emoji = "🟢"
-                        _color_bar = "#5BAE7D"     # verde
-                        _color_txt = "#0F6E56"
-
-                    _col_lbl, _col_bar, _col_dat = st.columns(
-                        [3, 4, 2]
-                    )
-                    with _col_lbl:
-                        st.markdown(
-                            f"**{_a['cliente']}** · "
-                            f"{_a['lote']}"
-                        )
-                        st.caption(
-                            f"{_emoji} {_a['producto']}"
-                        )
-                    with _col_bar:
-                        # Barra HTML custom: marcas verticales en 7, 14, 30
-                        # días y relleno con el color de urgencia.
-                        # Posición % de cada marca sobre la escala 0-60.
-                        _m7 = 7 / _ESCALA_MAX_DIAS * 100
-                        _m14 = 14 / _ESCALA_MAX_DIAS * 100
-                        _m30 = 30 / _ESCALA_MAX_DIAS * 100
-                        # Label dentro o al lado de la barra según
-                        # cuánto avance tenga (si <12%, fuera; si no,
-                        # dentro)
-                        _label_in = (
-                            f"{_dias_a:.0f}d"
-                            if _pct >= 18 else ""
-                        )
-                        _label_out = (
-                            f"{_dias_a:.0f}d"
-                            if _pct < 18 else ""
-                        )
-                        # IMPORTANTE: HTML en una sola línea, sin
-                        # indentación ni comentarios. Streamlit con
-                        # unsafe_allow_html=True parsea el bloque por
-                        # markdown primero y la indentación >4 espacios
-                        # hace que se renderice literal en barras chicas.
-                        _barra_html = (
-                            f'<div style="display:flex;align-items:center;'
-                            f'gap:6px;margin-top:10px;">'
-                            f'<div style="position:relative;flex:1;'
-                            f'background:#F0F0F0;border-radius:6px;'
-                            f'height:22px;overflow:hidden;">'
-                            f'<div style="position:absolute;left:{_m7}%;'
-                            f'top:0;bottom:0;width:1px;'
-                            f'background:rgba(0,0,0,0.18);z-index:2;"></div>'
-                            f'<div style="position:absolute;left:{_m14}%;'
-                            f'top:0;bottom:0;width:1px;'
-                            f'background:rgba(0,0,0,0.18);z-index:2;"></div>'
-                            f'<div style="position:absolute;left:{_m30}%;'
-                            f'top:0;bottom:0;width:1px;'
-                            f'background:rgba(0,0,0,0.18);z-index:2;"></div>'
-                            f'<div style="background:{_color_bar};'
-                            f'height:100%;width:{_pct}%;'
-                            f'border-radius:6px 0 0 6px;z-index:1;'
-                            f'position:relative;display:flex;'
-                            f'align-items:center;padding-left:8px;'
-                            f'color:white;font-size:12px;font-weight:600;'
-                            f'white-space:nowrap;">{_label_in}</div>'
-                            f'</div>'
-                            f'<span style="color:{_color_txt};'
-                            f'font-size:12px;font-weight:600;'
-                            f'min-width:30px;">{_label_out}</span>'
-                            f'</div>'
-                            f'<div style="display:flex;'
-                            f'justify-content:space-between;'
-                            f'font-size:10px;color:#999;margin-top:2px;'
-                            f'padding:0 2px;">'
-                            f'<span>0</span>'
-                            f'<span style="margin-left:-8px;">7d</span>'
-                            f'<span style="margin-left:8px;">14d</span>'
-                            f'<span>30d</span>'
-                            f'<span>60d+</span>'
-                            f'</div>'
-                        )
-                        st.markdown(
-                            _barra_html, unsafe_allow_html=True,
-                        )
-                    with _col_dat:
-                        _fecha_agot_raw = _a.get("fecha_agot")
-                        try:
-                            _fecha_agot_show = (
-                                datetime.strptime(
-                                    _fecha_agot_raw, "%Y-%m-%d",
-                                ).strftime("%d/%m/%y")
-                                if _fecha_agot_raw else "—"
-                            )
-                        except Exception:
-                            _fecha_agot_show = _fecha_agot_raw or "—"
-                        # Render unificado: en silocomedero o lineal,
-                        # mostramos "se acaba DD/MM/YY". En silo
-                        # agregamos abajo un detalle gris con kg/carga
-                        # y aviso si la próxima carga no llega.
-                        _detalle_extra = ""
-                        if (_a.get("es_silocomedero")
-                                and _a.get("cargas_restantes")
-                                is not None):
-                            _cr = _a["cargas_restantes"]
-                            _kgpc = _a.get(
-                                "kg_prod_por_carga"
-                            ) or 0
-                            _aviso = ""
-                            if _cr < 1:
-                                _aviso = " · ⚠️ no alcanza la próxima"
-                            _detalle_extra = (
-                                f"<br><span style='color:#999;"
-                                f"font-size:11px;'>"
-                                f"~{_kgpc:.0f} kg/carga del silo"
-                                f"{_aviso}"
-                                f"</span>"
-                            )
-                        st.markdown(
-                            f"<div style='text-align:right;"
-                            f"margin-top:10px;'>"
-                            f"<strong>{_a['kg_rest']:.0f} kg"
-                            f"</strong>"
-                            f"<br><span style='color:{_color_txt};"
-                            f"font-size:13px;'>"
-                            f"se acaba {_fecha_agot_show}"
-                            f"</span>"
-                            f"{_detalle_extra}"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
 
             # ── Autonomía del silocomedero por lote ──
             # Para los lotes que están en silocomedero (mezcla cargada
@@ -4146,7 +4272,10 @@ with tab_inicio:
 
         st.divider()
 
-        # ═══════════════ BLOQUE DE ALERTAS (original) ═══════════════
+        # ═══════════════ ALERTAS DE STOCK (detalle) ═══════════════
+        # La vista principal ahora es la grilla de tarjetas de
+        # clientes de arriba; la tabla detallada queda colapsada
+        # para no perder información.
         if not _filas_log:
             st.success(
                 "✅ Sin alertas de stock — todos los clientes con "
@@ -4154,53 +4283,21 @@ with tab_inicio:
                 "autonomía. Volvé a chequear durante la semana."
             )
         else:
-            # Ordenar por urgencia (días ascendente)
-            _filas_log.sort(key=lambda x: x["_dias_sort"])
-            _n_urg = sum(
-                1 for f in _filas_log
-                if "🔴" in f["Urgencia"]
+            _filas_log.sort(
+                key=lambda x: x.get("_dias_sort", 999)
             )
-            _n_sem = sum(
-                1 for f in _filas_log
-                if "🟠" in f["Urgencia"]
-            )
-            _n_prox = sum(
-                1 for f in _filas_log
-                if "🟡" in f["Urgencia"]
-            )
-            _logc1, _logc2, _logc3 = st.columns(3)
-            _logc1.metric(
-                "🔴 Urgentes / agotados", _n_urg,
-                help="Stock para 3 días o menos, o ya agotado",
-            )
-            _logc2.metric(
-                "🟠 Esta semana", _n_sem,
-                help="Stock para 4-7 días",
-            )
-            _logc3.metric(
-                "🟡 Próxima semana", _n_prox,
-                help="Stock para 8-14 días",
-            )
-
-            if _n_urg > 0:
-                st.error(
-                    f"🔴 **{_n_urg} cliente(s) con stock urgente.** "
-                    f"Contactar HOY para coordinar entrega."
+            with st.expander(
+                f"📋 Ver tabla detallada de alertas de stock "
+                f"({len(_filas_log)})",
+                expanded=False,
+            ):
+                import pandas as _pd_log
+                _df_log = _pd_log.DataFrame(_filas_log).drop(
+                    columns=["_dias_sort"], errors="ignore",
                 )
-            elif _n_sem > 0:
-                st.warning(
-                    f"🟠 **{_n_sem} cliente(s) necesita reposición "
-                    f"esta semana.** Anticipar logística."
+                st.dataframe(
+                    _df_log, hide_index=True, width="stretch",
                 )
-
-            # Tabla detallada
-            import pandas as _pd_log
-            _df_log = _pd_log.DataFrame(_filas_log).drop(
-                columns=["_dias_sort"],
-            )
-            st.dataframe(
-                _df_log, hide_index=True, width="stretch",
-            )
 
     except Exception as _e_log:
         import traceback as _tb_log
