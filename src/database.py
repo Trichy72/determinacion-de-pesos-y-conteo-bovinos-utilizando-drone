@@ -2792,9 +2792,17 @@ def reprogramar_recordatorio(rid: int, nueva_fecha: str) -> bool:
 def _existe_recordatorio_auto(
     cliente_id: int, origen: str, ventana_dias: int = 14,
 ) -> bool:
-    """¿Ya hay un recordatorio (pendiente o hecho) del mismo origen
-    automático en la ventana? Sirve para evitar duplicados al
-    generar sugerencias.
+    """¿Ya hay un recordatorio del mismo origen automático que deba
+    bloquear una nueva sugerencia? Bloquea si:
+
+    - existe uno PENDIENTE de ese origen (sin importar cuándo se
+      creó — mientras siga abierto no tiene sentido crear otro), o
+    - se creó uno (pendiente/hecho/cancelado) dentro de la ventana
+      de `ventana_dias` días.
+
+    Antes solo miraba la ventana de creación, por lo que un
+    recordatorio pendiente viejo (>14/21 días de atraso) no frenaba
+    la creación de uno nuevo → duplicados por cliente.
     """
     from datetime import datetime as _dt, timedelta as _td
     desde = (_dt.now().date() - _td(days=ventana_dias)).isoformat()
@@ -2802,10 +2810,86 @@ def _existe_recordatorio_auto(
         r = conn.execute(
             """SELECT COUNT(*) AS n FROM recordatorios_llamada
                WHERE cliente_id = ? AND origen = ?
-                 AND date(creado_en) >= date(?)""",
+                 AND (estado = 'pendiente'
+                      OR date(creado_en) >= date(?))""",
             (cliente_id, origen, desde),
         ).fetchone()
         return (r["n"] if r else 0) > 0
+
+
+@_invalida_cache
+def cancelar_recordatorios_auto_cliente(cliente_id: int) -> int:
+    """Cancela TODOS los recordatorios PENDIENTES de origen
+    automático (origen != 'manual') de un cliente. Los recordatorios
+    manuales NO se tocan. Devuelve cuántos canceló."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            """UPDATE recordatorios_llamada
+               SET estado = 'cancelado',
+                   completado_en = CURRENT_TIMESTAMP
+               WHERE cliente_id = ?
+                 AND estado = 'pendiente'
+                 AND origen != 'manual'""",
+            (cliente_id,),
+        )
+        return cur.rowcount or 0
+
+
+@_invalida_cache
+def posponer_recordatorios_cliente(
+    cliente_id: int, dias: int = 7,
+) -> int:
+    """Pospone todos los recordatorios PENDIENTES ya vencidos (o de
+    hoy) de un cliente: nueva fecha = hoy + `dias`. Los futuros no se
+    tocan. Devuelve cuántos reprogramó."""
+    from datetime import datetime as _dt, timedelta as _td
+    hoy = _dt.now().date()
+    nueva = (hoy + _td(days=dias)).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """UPDATE recordatorios_llamada
+               SET fecha_objetivo = ?
+               WHERE cliente_id = ?
+                 AND estado = 'pendiente'
+                 AND date(fecha_objetivo) <= date(?)""",
+            (nueva, cliente_id, hoy.isoformat()),
+        )
+        return cur.rowcount or 0
+
+
+def dedup_recordatorios_pendientes() -> int:
+    """Limpieza idempotente de duplicados históricos: para cada
+    cliente con MÁS de un recordatorio SUGERIDO (origen != 'manual')
+    pendiente del mismo origen, conserva el más antiguo (el de mayor
+    atraso) y cancela el resto marcándolo como duplicado.
+
+    - NUNCA toca recordatorios manuales creados por el usuario.
+    - Barata: un solo UPDATE; si no hay duplicados no escribe nada
+      y no invalida el cache.
+
+    Devuelve la cantidad de recordatorios cancelados.
+    """
+    n = 0
+    with get_conn() as conn:
+        cur = conn.execute(
+            """UPDATE recordatorios_llamada
+               SET estado = 'cancelado',
+                   notas_cierre = 'Duplicado (dedup automático)',
+                   completado_en = CURRENT_TIMESTAMP
+               WHERE estado = 'pendiente'
+                 AND origen != 'manual'
+                 AND id NOT IN (
+                     SELECT MIN(id)
+                     FROM recordatorios_llamada
+                     WHERE estado = 'pendiente'
+                       AND origen != 'manual'
+                     GROUP BY cliente_id, origen
+                 )""",
+        )
+        n = cur.rowcount or 0
+    if n:
+        invalidar_cache_lecturas()
+    return n
 
 
 @_cache_lectura

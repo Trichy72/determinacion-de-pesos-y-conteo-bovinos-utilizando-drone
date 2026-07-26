@@ -2184,6 +2184,15 @@ with tab_inicio:
         except Exception:
             pass
 
+        # Limpieza idempotente de duplicados históricos: si un
+        # cliente juntó varios sugeridos pendientes del mismo tipo
+        # (bug de la ventana de dedup, ya corregido), conservamos el
+        # más atrasado y cancelamos el resto. No toca manuales.
+        try:
+            db.dedup_recordatorios_pendientes()
+        except Exception:
+            pass
+
         _recos = []
         try:
             _recos = db.listar_recordatorios_pendientes(
@@ -2192,8 +2201,22 @@ with tab_inicio:
         except Exception as _e:
             st.warning(f"No pude leer recordatorios: {_e}")
 
+        # ─── Agrupar por cliente ───
+        # Un cliente puede tener varios pendientes (p.ej. manual +
+        # sugerido). En la UI mostramos UNA entrada por cliente,
+        # usando el MÁS atrasado como representante (_recos ya viene
+        # ordenado por fecha ASC, así que el primero de cada cliente
+        # es el más atrasado). El grupo completo queda disponible
+        # para las acciones en bloque (+7d / cerrar).
+        _recos_grupos = {}
+        for _r_g in _recos:
+            _recos_grupos.setdefault(
+                _r_g["cliente_id"], []
+            ).append(_r_g)
+        _recos_uniq = [g[0] for g in _recos_grupos.values()]
+
         with st.expander(
-            f"📞 Llamados pendientes ({len(_recos)})",
+            f"📞 Llamados pendientes ({len(_recos_uniq)})",
             expanded=False,
         ):
             # ─── Botón único: programar futuro llamado ───
@@ -2213,17 +2236,17 @@ with tab_inicio:
                 ):
                     st.session_state["mostrar_form_recordatorio"] = True
             with _col_info_reco:
-                if _recos:
+                if _recos_uniq:
                     _hoy_iso_r = datetime.now().date().isoformat()
                     _atrasados = sum(
-                        1 for r in _recos
+                        1 for r in _recos_uniq
                         if r["fecha_objetivo"] < _hoy_iso_r
                     )
                     _hoy_n = sum(
-                        1 for r in _recos
+                        1 for r in _recos_uniq
                         if r["fecha_objetivo"] == _hoy_iso_r
                     )
-                    _futuros = len(_recos) - _atrasados - _hoy_n
+                    _futuros = len(_recos_uniq) - _atrasados - _hoy_n
                     _msg_partes = []
                     if _atrasados:
                         _msg_partes.append(
@@ -2304,9 +2327,12 @@ with tab_inicio:
                 pass
 
             # ─── Lista de recordatorios pendientes ───
-            if _recos:
+            # Un renglón por CLIENTE (representante = el más
+            # atrasado). Si el cliente tiene más de un pendiente,
+            # las acciones actúan en bloque (ver botones).
+            if _recos_uniq:
                 _hoy_d = datetime.now().date()
-                for _r in _recos:
+                for _r in _recos_uniq:
                     try:
                         _fobj = datetime.strptime(
                             _r["fecha_objetivo"], "%Y-%m-%d"
@@ -2346,10 +2372,19 @@ with tab_inicio:
                         )
                         if len(_motivo_short) > 140:
                             _motivo_short = _motivo_short[:137] + "..."
+                        _grupo_r = _recos_grupos.get(
+                            _r["cliente_id"], [_r]
+                        )
+                        _extra_grupo = (
+                            f" · +{len(_grupo_r) - 1} más de este "
+                            "cliente"
+                            if len(_grupo_r) > 1 else ""
+                        )
                         st.markdown(
                             f"{_ico_r} **{_r['cliente_nombre']}** · "
                             f"{_fobj.strftime('%d/%m/%Y')} "
                             f"_({_txt_d})_ · {_ico_orig}"
+                            f"{_extra_grupo}"
                         )
                         if _motivo_short:
                             st.caption(f"📝 {_motivo_short}")
@@ -2395,20 +2430,50 @@ with tab_inicio:
                             "📅 +7d",
                             key=f"reco_reprog7_{_r['id']}",
                             width="stretch",
-                            help="Postergar 7 días",
+                            help=(
+                                "Postergar 7 días (si el cliente "
+                                "tiene varios pendientes vencidos, "
+                                "se postergan todos)"
+                            ),
                         ):
                             from datetime import timedelta as _td_r
-                            _nf = (_fobj + _td_r(days=7)).isoformat()
-                            db.reprogramar_recordatorio(_r["id"], _nf)
+                            if _fobj <= _hoy_d:
+                                # Atrasado o de HOY → posponer en
+                                # bloque todos los vencidos del
+                                # cliente a hoy+7.
+                                db.posponer_recordatorios_cliente(
+                                    _r["cliente_id"], dias=7,
+                                )
+                            else:
+                                _nf = (
+                                    _fobj + _td_r(days=7)
+                                ).isoformat()
+                                db.reprogramar_recordatorio(
+                                    _r["id"], _nf,
+                                )
                             st.rerun()
                     with _cols_r[3]:
                         if st.button(
                             "✖ Cerrar",
                             key=f"reco_cancel_{_r['id']}",
                             width="stretch",
-                            help="Cancelar este recordatorio",
+                            help=(
+                                "Cancelar este recordatorio (si es "
+                                "sugerido, cancela todos los "
+                                "sugeridos pendientes del cliente)"
+                            ),
                         ):
-                            db.cancelar_recordatorio(_r["id"])
+                            if (_r.get("origen")
+                                    or "manual") == "manual":
+                                # Manual: solo el propio.
+                                db.cancelar_recordatorio(_r["id"])
+                            else:
+                                # Sugerido: cerrar todos los autos
+                                # pendientes del cliente (los
+                                # manuales no se tocan).
+                                db.cancelar_recordatorios_auto_cliente(
+                                    _r["cliente_id"]
+                                )
                             st.rerun()
                     st.divider()
                     # Saltar el bloque expandido viejo
@@ -3661,11 +3726,14 @@ with tab_inicio:
                 elif "URGENTE" in _urg_pri:
                     _n_pri_urgente += 1
             try:
-                _n_pri_llam = sum(
-                    1 for _r_pri in (_recos or [])
+                # Clientes ÚNICOS con llamadas atrasadas/de hoy
+                # (un cliente con varios recordatorios cuenta 1).
+                _n_pri_llam = len({
+                    _r_pri.get("cliente_id")
+                    for _r_pri in (_recos or [])
                     if str(_r_pri.get("fecha_objetivo", ""))
                     <= _hoy_pri_iso
-                )
+                })
             except Exception:
                 _n_pri_llam = 0
             try:
@@ -3856,10 +3924,18 @@ with tab_inicio:
                             )
                     elif _panel_pri_sel == "llamadas":
                         _hoy_pan = datetime.now().date()
+                        # Una fila por CLIENTE: representante = el
+                        # recordatorio más atrasado (_recos viene
+                        # ordenado por fecha ASC).
+                        _grupos_pan = {}
+                        for r in (_recos or []):
+                            if str(r.get("fecha_objetivo", "")) \
+                                    <= _hoy_pan.isoformat():
+                                _grupos_pan.setdefault(
+                                    r["cliente_id"], []
+                                ).append(r)
                         _rows_pan = [
-                            r for r in (_recos or [])
-                            if str(r.get("fecha_objetivo", ""))
-                            <= _hoy_pan.isoformat()
+                            g[0] for g in _grupos_pan.values()
                         ]
                         if not _rows_pan:
                             st.caption(
@@ -3878,6 +3954,11 @@ with tab_inicio:
                                 (_r_pan.get("motivo") or "").strip()
                                 .replace("\n", " ")[:60]
                             )
+                            _n_grp_pan = len(
+                                _grupos_pan.get(
+                                    _r_pan["cliente_id"], [_r_pan],
+                                )
+                            )
                             _cp1, _cp2, _cp3 = st.columns([5, 1, 1])
                             _cp1.markdown(
                                 f"**{_r_pan.get('cliente_nombre', '?')}"
@@ -3886,6 +3967,8 @@ with tab_inicio:
                                     f" · {_atr_pan} día(s) de atraso"
                                     if _atr_pan > 0 else " · HOY"
                                 )
+                                + (f" · {_n_grp_pan} recordatorios"
+                                   if _n_grp_pan > 1 else "")
                                 + (f" · {_mot_pan}"
                                    if _mot_pan else "")
                             )
@@ -3893,26 +3976,40 @@ with tab_inicio:
                                 "+7d",
                                 key=f"pri_reco7_{_r_pan['id']}",
                                 width="stretch",
-                                help="Postergar 7 días",
+                                help=(
+                                    "Postergar 7 días todos los "
+                                    "pendientes vencidos del cliente"
+                                ),
                             ):
-                                from datetime import (
-                                    timedelta as _td_pan,
-                                )
-                                db.reprogramar_recordatorio(
-                                    _r_pan["id"],
-                                    (_f_pan_d + _td_pan(days=7))
-                                    .isoformat(),
+                                # Posponer en bloque: todos los
+                                # pendientes vencidos/de hoy del
+                                # cliente pasan a hoy+7.
+                                db.posponer_recordatorios_cliente(
+                                    _r_pan["cliente_id"], dias=7,
                                 )
                                 st.rerun()
                             if _cp3.button(
                                 "✕",
                                 key=f"pri_recox_{_r_pan['id']}",
                                 width="stretch",
-                                help="Cancelar este recordatorio",
+                                help=(
+                                    "Cancelar (si es sugerido, "
+                                    "cancela todos los sugeridos "
+                                    "pendientes del cliente)"
+                                ),
                             ):
-                                db.cancelar_recordatorio(
-                                    _r_pan["id"]
-                                )
+                                if (_r_pan.get("origen")
+                                        or "manual") == "manual":
+                                    # Manual: solo el propio.
+                                    db.cancelar_recordatorio(
+                                        _r_pan["id"]
+                                    )
+                                else:
+                                    # Sugerido: cerrar todos los
+                                    # autos pendientes del cliente.
+                                    db.cancelar_recordatorios_auto_cliente(
+                                        _r_pan["cliente_id"]
+                                    )
                                 st.rerun()
                         if _rows_pan:
                             st.caption(
@@ -4652,11 +4749,13 @@ with tab_inicio:
         except Exception:
             pass
         try:
-            _n_llam_ag = sum(
-                1 for _r_ag in (_recos or [])
+            # Clientes únicos con llamadas pendientes (dedup).
+            _n_llam_ag = len({
+                _r_ag.get("cliente_id")
+                for _r_ag in (_recos or [])
                 if str(_r_ag.get("fecha_objetivo", ""))
                 <= _hoy_ag.isoformat()
-            )
+            })
         except Exception:
             _n_llam_ag = 0
         if _n_llam_ag:
