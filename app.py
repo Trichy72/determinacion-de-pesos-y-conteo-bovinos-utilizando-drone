@@ -1563,63 +1563,59 @@ st.markdown("""
         border: 2px solid #1B3E27;
     }
     /* Barra de pestañas principal — píldoras estilo HMS.
-       Selectores dobles (.stTabs legacy + data-testid moderno) porque
-       Streamlit >=1.4x ya no garantiza la clase .stTabs. */
-    .stTabs [data-baseweb="tab-list"],
-    div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+       DOM nuevo de Streamlit >=1.49 (react-aria): [role="tablist"] +
+       div[data-testid="stTab"]. Verificado en vivo contra la app cloud. */
+    div[data-testid="stTabs"] [role="tablist"] {
         gap: 10px !important;
         border-bottom: none !important;
         padding: 8px !important;
         background: rgba(139, 197, 63, 0.07) !important;
         border-radius: 999px !important;
     }
-    .stTabs [data-baseweb="tab"],
-    div[data-testid="stTabs"] button[data-baseweb="tab"] {
+    div[data-testid="stTabs"] [data-testid="stTab"] {
         border-radius: 999px !important;
         padding: 12px 24px !important;
         height: auto !important;
         border: none !important;
+        border-bottom: none !important;
         background: transparent;
+        color: rgba(128, 132, 138, 0.95) !important;
         transition: background 0.15s ease, color 0.15s ease;
     }
-    .stTabs [data-baseweb="tab"] p,
-    div[data-testid="stTabs"] button[data-baseweb="tab"] p {
+    div[data-testid="stTabs"] [data-testid="stTab"] p {
         font-size: 1.05rem !important;
         font-weight: 600 !important;
         letter-spacing: 0.02em;
         margin: 0 !important;
         color: inherit !important;
     }
-    div[data-testid="stTabs"] button[data-baseweb="tab"] {
-        color: rgba(128, 132, 138, 0.95) !important;
-    }
-    .stTabs [data-baseweb="tab"]:hover,
-    div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
+    div[data-testid="stTabs"] [data-testid="stTab"]:hover {
         background: rgba(139, 197, 63, 0.15) !important;
     }
-    .stTabs [data-baseweb="tab"][aria-selected="true"],
-    div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
+    div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"],
+    div[data-testid="stTabs"] div[data-testid="stTab"][data-selected="true"] {
         background: #8BC53F !important;
+        background-color: #8BC53F !important;
         color: #0B2012 !important;
         box-shadow: 0 2px 8px rgba(139, 197, 63, 0.35);
     }
+    div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] p,
+    div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] span {
+        color: #0B2012 !important;
+    }
     /* Íconos material de las tabs un poco más grandes */
-    div[data-testid="stTabs"] button[data-baseweb="tab"] span[data-testid="stIconMaterial"],
-    .stTabs [data-baseweb="tab"] span[data-testid="stIconMaterial"] {
+    div[data-testid="stTabs"] [data-testid="stTab"] span[data-testid="stIconMaterial"] {
         font-size: 1.3rem !important;
         vertical-align: -3px;
         color: inherit !important;
     }
-    /* Ocultar la barrita indicadora nativa (roja por default) */
-    .stTabs [data-baseweb="tab-highlight"],
-    div[data-testid="stTabs"] [data-baseweb="tab-highlight"] { display: none !important; }
-    .stTabs [data-baseweb="tab-border"],
-    div[data-testid="stTabs"] [data-baseweb="tab-border"] { display: none !important; }
-    /* El label hereda el color de la píldora */
-    div[data-testid="stTabs"] button[data-baseweb="tab"] [data-testid="stMarkdownContainer"],
-    div[data-testid="stTabs"] button[data-baseweb="tab"] [data-testid="stMarkdownContainer"] span {
-        color: inherit !important;
+    /* Ocultar el indicador nativo (subrayado rojo): cualquier hijo del
+       tablist que no sea una pestaña es el indicador. */
+    div[data-testid="stTabs"] [role="tablist"] > div:not([data-testid="stTab"]) {
+        display: none !important;
     }
+    /* Legacy (por si Streamlit vuelve a BaseWeb) */
+    .stTabs [data-baseweb="tab-highlight"] { display: none !important; }
     /* Métricas */
     [data-testid="stMetricValue"] { color: #1B3E27; }
 </style>
