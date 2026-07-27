@@ -1566,42 +1566,43 @@ st.markdown("""
        DOM nuevo de Streamlit >=1.49 (react-aria): [role="tablist"] +
        div[data-testid="stTab"]. Verificado en vivo contra la app cloud. */
     div[data-testid="stTabs"] [role="tablist"] {
-        gap: 10px !important;
+        gap: 4px !important;
         border-bottom: none !important;
-        padding: 8px !important;
-        background: rgba(139, 197, 63, 0.07) !important;
-        border-radius: 999px !important;
+        padding: 6px !important;
+        background: #22262b !important;
+        border-radius: 14px !important;
     }
     div[data-testid="stTabs"] [data-testid="stTab"] {
-        border-radius: 999px !important;
-        padding: 12px 24px !important;
+        border-radius: 10px !important;
+        padding: 11px 20px !important;
         height: auto !important;
         border: none !important;
         border-bottom: none !important;
         background: transparent;
-        color: rgba(128, 132, 138, 0.95) !important;
+        color: #a7aeb5 !important;
         transition: background 0.15s ease, color 0.15s ease;
     }
     div[data-testid="stTabs"] [data-testid="stTab"] p {
-        font-size: 1.05rem !important;
+        font-size: 1.0rem !important;
         font-weight: 600 !important;
-        letter-spacing: 0.02em;
+        letter-spacing: 0.01em;
         margin: 0 !important;
         color: inherit !important;
     }
     div[data-testid="stTabs"] [data-testid="stTab"]:hover {
-        background: rgba(139, 197, 63, 0.15) !important;
+        background: rgba(255, 255, 255, 0.07) !important;
+        color: #d6dade !important;
     }
     div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"],
     div[data-testid="stTabs"] div[data-testid="stTab"][data-selected="true"] {
-        background: #8BC53F !important;
-        background-color: #8BC53F !important;
-        color: #0B2012 !important;
-        box-shadow: 0 2px 8px rgba(139, 197, 63, 0.35);
+        background: #f2f2f0 !important;
+        background-color: #f2f2f0 !important;
+        color: #1a1a18 !important;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
     }
     div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] p,
     div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] span {
-        color: #0B2012 !important;
+        color: #1a1a18 !important;
     }
     /* Íconos material de las tabs un poco más grandes */
     div[data-testid="stTabs"] [data-testid="stTab"] span[data-testid="stIconMaterial"] {
