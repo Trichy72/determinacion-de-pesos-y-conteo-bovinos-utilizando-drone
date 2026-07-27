@@ -18,7 +18,9 @@ scikit-learn>=1.3.0
 scipy>=1.11.0
 
 # ─── UI Web ───
-streamlit>=1.32.0
+# ≥1.49: st.fragment estable (1.37+) + width="stretch" (1.49+),
+# ambos usados por la app. Streamlit Cloud instala la última igual.
+streamlit>=1.49.0
 streamlit-extras>=0.4.0
 
 # ─── Base de datos (Postgres en Supabase) ───

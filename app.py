@@ -14520,6 +14520,87 @@ with tab_ia:
     else:
         lote_para_ia_id = None
 
+    # ─── PERFORMANCE: contexto "pesado" del lote (histórico DB +
+    # clínico + clima + estación oficial) = 5-8 queries a Supabase
+    # (~200 ms c/u) + APIs de clima. Se cachea en session_state por
+    # lote con TTL de 10 min; se invalida al cambiar de lote, por TTL
+    # o con el botón "🔄 Actualizar contexto". Centralizado acá para
+    # que lo usen: (a) el precalentado de abajo, (b) el chat, y
+    # (c) el expander "Ver contexto" — sin duplicar queries.
+    def _obtener_ctx_pesado_ia(_lote_id):
+        if not _lote_id:
+            return ""
+        _ctx_cache = st.session_state.get("_ctx_ia_cache") or {}
+        if (
+            _ctx_cache.get("lote_id") == _lote_id
+            and isinstance(_ctx_cache.get("ts"), datetime)
+            and (datetime.now() - _ctx_cache["ts"]).total_seconds() < 600
+        ):
+            return _ctx_cache.get("texto", "")
+        _partes_ctx = []
+        ctx_historico = db.resumen_lote_para_ia(_lote_id)
+        if ctx_historico:
+            _partes_ctx.append(ctx_historico)
+        # ─── Histórico clínico completo (unificado con el
+        # análisis climático del lote): mortandad por causa,
+        # patrones recurrentes, diagnósticos abiertos, ADG
+        # real, sub-consumo medido, fase del plan, últimas
+        # consultas. Hace que el chat conversacional vea lo
+        # mismo que el botón "🤖 Generar análisis IA".
+        try:
+            ctx_clinico = dashboard.armar_contexto_clinico_lote(
+                _lote_id, db,
+            )
+            if ctx_clinico:
+                _partes_ctx.append(ctx_clinico)
+        except Exception:
+            pass
+        # Si el cliente del lote tiene localidad, sumar clima + alertas
+        lote_data = db.obtener_lote(_lote_id)
+        if lote_data:
+            cli = db.obtener_cliente(lote_data["cliente_id"])
+            if cli and cli.get("localidad"):
+                try:
+                    ctx_clima = resumen_clima_para_ia(
+                        cli["localidad"],
+                        categoria=lote_data.get("categoria", ""),
+                    )
+                    if ctx_clima:
+                        _partes_ctx.append(ctx_clima)
+                    # Si el cliente está en La Pampa, sumar
+                    # estación oficial (datos reales gobierno)
+                    if cli.get("lat") and cli.get("lon"):
+                        try:
+                            ctx_oficial = resumen_estacion_oficial(
+                                float(cli["lat"]), float(cli["lon"]),
+                            )
+                            if ctx_oficial:
+                                _partes_ctx.append(ctx_oficial)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logging.warning(f"Clima no disponible: {e}")
+        _texto_ctx = "\n\n".join(
+            p.strip() for p in _partes_ctx if p
+        ).strip()
+        st.session_state["_ctx_ia_cache"] = {
+            "lote_id": _lote_id,
+            "ts": datetime.now(),
+            "texto": _texto_ctx,
+        }
+        return _texto_ctx
+
+    # ─── Precalentar el contexto al renderizar la pestaña: apenas el
+    # usuario elige un lote contextual, las queries + clima corren acá
+    # (antes de que escriba). El PRIMER mensaje del chat ya encuentra
+    # el contexto cacheado y va directo a la API. Con cache vigente
+    # esta llamada es un no-op instantáneo.
+    if lote_para_ia_id:
+        try:
+            _obtener_ctx_pesado_ia(lote_para_ia_id)
+        except Exception:
+            pass
+
     # Inicializar historial
     if "chat_messages" not in st.session_state:
         st.session_state["chat_messages"] = []
@@ -14572,566 +14653,521 @@ with tab_ia:
             st.session_state.pop("_ctx_ia_cache", None)
             st.toast("Contexto del lote actualizado ✅")
 
-    if not st.session_state["chat_messages"]:
-        st.markdown("**💡 Sugerencias para empezar:**")
-        sug_cols = st.columns(2)
-        suggestions = []
+    # ─── PERFORMANCE: todo el chat vive en un st.fragment ───
+    # Cada interacción del chat (mandar mensaje, sugerencia, botones
+    # Recordar/PDF, adjuntos) re-ejecuta SOLO esta función, NO las
+    # ~16k líneas de app.py. Antes, cada mensaje pagaba el re-render
+    # completo de dashboard, pestañas y logística ANTES de llamar a
+    # la API — varios segundos de overhead por mensaje. Los
+    # st.rerun() internos usan scope="fragment"; la única excepción
+    # es "✅ Guardar" memoria, que hace rerun de app completa porque
+    # la lista de memorias vive fuera del fragment.
+    @st.fragment
+    def _chat_asesor_fragment():
+        if not st.session_state["chat_messages"]:
+            st.markdown("**💡 Sugerencias para empezar:**")
+            sug_cols = st.columns(2)
+            suggestions = []
 
-        if has_lot_data:
-            suggestions = [
-                ("📊 Explicame los resultados de mi lote para charlarlos con el productor",
-                 "Explicame los resultados del análisis de mi lote en lenguaje simple, "
-                 "como para charlarlo con el dueño del campo. Dame cuántos están parejos, "
-                 "cuáles necesitan revisión y qué próximos pasos recomendás."),
-                ("🍽️ Recomendame una dieta para este lote",
-                 "Necesito recomendación de ración para mi lote actual. Tengo disponible "
-                 "maíz, silaje de maíz, fibrogreen, núcleo mineral y sal. Pediime los "
-                 "datos que falten."),
-                ("⚠️ ¿Por qué pueden estar bajos en peso algunos animales?",
-                 "Algunos animales del lote están notablemente más livianos que el "
-                 "promedio. ¿Cuáles son las causas más probables y qué chequeos recomendás?"),
-                ("📅 Proyectame a faena",
-                 "Con el peso actual de mi lote, ¿cuántos días faltan para faena (objetivo "
-                 "390 kg) si mantengo el ADG actual? ¿Qué dieta recomendás?"),
-            ]
-        else:
-            suggestions = [
-                ("🍽️ Formular dieta de recría",
-                 "Quiero armar una dieta de recría. Pediime los datos que necesites."),
-                ("📚 ¿Cuánto debe ser el % de PB para terminación?",
-                 "¿Qué porcentaje de proteína bruta es óptimo para una dieta de "
-                 "terminación según NASEM 2016 y según la práctica argentina?"),
-                ("🌡️ Manejo en estrés calórico",
-                 "¿Cómo ajusto la dieta cuando hay estrés calórico (>30°C) en feedlot?"),
-                ("⚙️ Plan de adaptación a grano",
-                 "¿Cómo armo un plan de adaptación de 10 días para entrar terneros "
-                 "de pasto a corral con dieta de grano alta?"),
-            ]
+            if has_lot_data:
+                suggestions = [
+                    ("📊 Explicame los resultados de mi lote para charlarlos con el productor",
+                     "Explicame los resultados del análisis de mi lote en lenguaje simple, "
+                     "como para charlarlo con el dueño del campo. Dame cuántos están parejos, "
+                     "cuáles necesitan revisión y qué próximos pasos recomendás."),
+                    ("🍽️ Recomendame una dieta para este lote",
+                     "Necesito recomendación de ración para mi lote actual. Tengo disponible "
+                     "maíz, silaje de maíz, fibrogreen, núcleo mineral y sal. Pediime los "
+                     "datos que falten."),
+                    ("⚠️ ¿Por qué pueden estar bajos en peso algunos animales?",
+                     "Algunos animales del lote están notablemente más livianos que el "
+                     "promedio. ¿Cuáles son las causas más probables y qué chequeos recomendás?"),
+                    ("📅 Proyectame a faena",
+                     "Con el peso actual de mi lote, ¿cuántos días faltan para faena (objetivo "
+                     "390 kg) si mantengo el ADG actual? ¿Qué dieta recomendás?"),
+                ]
+            else:
+                suggestions = [
+                    ("🍽️ Formular dieta de recría",
+                     "Quiero armar una dieta de recría. Pediime los datos que necesites."),
+                    ("📚 ¿Cuánto debe ser el % de PB para terminación?",
+                     "¿Qué porcentaje de proteína bruta es óptimo para una dieta de "
+                     "terminación según NASEM 2016 y según la práctica argentina?"),
+                    ("🌡️ Manejo en estrés calórico",
+                     "¿Cómo ajusto la dieta cuando hay estrés calórico (>30°C) en feedlot?"),
+                    ("⚙️ Plan de adaptación a grano",
+                     "¿Cómo armo un plan de adaptación de 10 días para entrar terneros "
+                     "de pasto a corral con dieta de grano alta?"),
+                ]
 
-        for i, (label, prompt) in enumerate(suggestions):
-            with sug_cols[i % 2]:
-                if st.button(label, key=f"sug_{i}", width="stretch"):
-                    st.session_state["chat_messages"].append(
-                        {"role": "user", "content": prompt}
-                    )
-                    st.rerun()
-
-    # Contenedor del chat (mensajes anteriores + nueva respuesta si toca generar)
-    chat_container = st.container()
-    with chat_container:
-        # 1) Render del historial existente con botones de acción
-        for i, msg in enumerate(st.session_state["chat_messages"]):
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-                # Para respuestas del agente: botones "Recordar" + "Generar PDF"
-                if msg["role"] == "assistant":
-                    cols_btn = st.columns([5, 1, 1])
-                    with cols_btn[1]:
-                        if st.button(
-                            "💾 Recordar", key=f"rem_btn_{i}",
-                            help="Guardar como memoria del agente",
-                            width="stretch",
-                        ):
-                            st.session_state["recordando_msg_idx"] = i
-                    with cols_btn[2]:
-                        if st.button(
-                            "📄 PDF", key=f"pdf_btn_{i}",
-                            help="Convertir esta respuesta en informe PDF "
-                                 "con marca HMS",
-                            width="stretch",
-                        ):
-                            st.session_state["pdf_chat_idx"] = i
-                else:
-                    # Mensajes del usuario: solo botón Recordar
-                    cols_btn = st.columns([6, 1])
-                    with cols_btn[1]:
-                        if st.button(
-                            "💾 Recordar", key=f"rem_btn_{i}",
-                            help="Guardar como memoria del agente",
-                            width="stretch",
-                        ):
-                            st.session_state["recordando_msg_idx"] = i
-
-        # 2) Si el último es del usuario y falta respuesta, GENERAR ACÁ
-        if (st.session_state["chat_messages"]
-                and st.session_state["chat_messages"][-1]["role"] == "user"):
-            contexto = construir_contexto_lote(st.session_state)
-            if lote_para_ia_id:
-                # ─── PERFORMANCE: el contexto "pesado" del lote
-                # (histórico DB + clínico + clima + estación oficial)
-                # implica 5-8 queries a Supabase (~200 ms c/u) + APIs
-                # de clima. Antes se reconstruía en CADA mensaje del
-                # chat; ahora se cachea en session_state por lote con
-                # TTL de 10 min. Se invalida al cambiar de lote, por
-                # TTL, o con el botón "🔄 Actualizar contexto".
-                _ctx_cache = st.session_state.get("_ctx_ia_cache") or {}
-                _ctx_vigente = (
-                    _ctx_cache.get("lote_id") == lote_para_ia_id
-                    and isinstance(_ctx_cache.get("ts"), datetime)
-                    and (datetime.now() - _ctx_cache["ts"]).total_seconds() < 600
-                )
-                if _ctx_vigente:
-                    ctx_pesado = _ctx_cache.get("texto", "")
-                else:
-                    _partes_ctx = []
-                    ctx_historico = db.resumen_lote_para_ia(lote_para_ia_id)
-                    if ctx_historico:
-                        _partes_ctx.append(ctx_historico)
-                    # ─── Histórico clínico completo (unificado con el
-                    # análisis climático del lote): mortandad por causa,
-                    # patrones recurrentes, diagnósticos abiertos, ADG
-                    # real, sub-consumo medido, fase del plan, últimas
-                    # consultas. Hace que el chat conversacional vea lo
-                    # mismo que el botón "🤖 Generar análisis IA".
-                    try:
-                        ctx_clinico = (
-                            dashboard.armar_contexto_clinico_lote(
-                                lote_para_ia_id, db,
-                            )
+            for i, (label, prompt) in enumerate(suggestions):
+                with sug_cols[i % 2]:
+                    if st.button(label, key=f"sug_{i}", width="stretch"):
+                        st.session_state["chat_messages"].append(
+                            {"role": "user", "content": prompt}
                         )
-                        if ctx_clinico:
-                            _partes_ctx.append(ctx_clinico)
-                    except Exception:
-                        pass
-                    # Si el cliente del lote tiene localidad, sumar clima + alertas
+                        st.rerun(scope="fragment")
+
+        # Contenedor del chat (mensajes anteriores + nueva respuesta si toca generar)
+        chat_container = st.container()
+        with chat_container:
+            # 1) Render del historial existente con botones de acción
+            for i, msg in enumerate(st.session_state["chat_messages"]):
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    # Para respuestas del agente: botones "Recordar" + "Generar PDF"
+                    if msg["role"] == "assistant":
+                        cols_btn = st.columns([5, 1, 1])
+                        with cols_btn[1]:
+                            if st.button(
+                                "💾 Recordar", key=f"rem_btn_{i}",
+                                help="Guardar como memoria del agente",
+                                width="stretch",
+                            ):
+                                st.session_state["recordando_msg_idx"] = i
+                        with cols_btn[2]:
+                            if st.button(
+                                "📄 PDF", key=f"pdf_btn_{i}",
+                                help="Convertir esta respuesta en informe PDF "
+                                     "con marca HMS",
+                                width="stretch",
+                            ):
+                                st.session_state["pdf_chat_idx"] = i
+                    else:
+                        # Mensajes del usuario: solo botón Recordar
+                        cols_btn = st.columns([6, 1])
+                        with cols_btn[1]:
+                            if st.button(
+                                "💾 Recordar", key=f"rem_btn_{i}",
+                                help="Guardar como memoria del agente",
+                                width="stretch",
+                            ):
+                                st.session_state["recordando_msg_idx"] = i
+
+            # 2) Si el último es del usuario y falta respuesta, GENERAR ACÁ
+            if (st.session_state["chat_messages"]
+                    and st.session_state["chat_messages"][-1]["role"] == "user"):
+                contexto = construir_contexto_lote(st.session_state)
+                if lote_para_ia_id:
+                    # Contexto pesado (histórico + clínico + clima) desde el
+                    # cache de sesión — precalentado al renderizar la
+                    # pestaña, así que acá casi siempre es un hit inmediato.
+                    ctx_pesado = _obtener_ctx_pesado_ia(lote_para_ia_id)
+                    if ctx_pesado:
+                        contexto = (contexto + "\n\n" + ctx_pesado).strip()
+                ctx_ingredientes = construir_contexto_ingredientes(st.session_state)
+                with st.chat_message("assistant"):
+                    placeholder = st.empty()
+                    full_response = ""
+                    try:
+                        # Pasar ingredientes en formato dict para tool use
+                        ings_data = None
+                        if "ingredientes_df" in st.session_state:
+                            try:
+                                ings_data = st.session_state["ingredientes_df"].to_dict("records")
+                            except Exception:
+                                ings_data = None
+
+                        # PDFs adjuntos al último mensaje del usuario
+                        _pdfs_envio = None
+                        _ultimo_msg = st.session_state["chat_messages"][-1]
+                        if _ultimo_msg.get("role") == "user":
+                            _pdfs_envio = _ultimo_msg.get("_pdf_attachments")
+                            if _pdfs_envio:
+                                placeholder.markdown(
+                                    f"📎 *Procesando "
+                                    f"{len(_pdfs_envio)} PDF(s)…*"
+                                )
+
+                        for chunk in chat_streaming(
+                            st.session_state["chat_messages"],
+                            contexto_lote=contexto,
+                            contexto_ingredientes=ctx_ingredientes,
+                            ingredientes_session=ings_data,
+                            pdf_attachments=_pdfs_envio,
+                            api_key=api_key,
+                            model=_modelo_ia,
+                        ):
+                            full_response += chunk
+                            placeholder.markdown(full_response + "▌")
+                        placeholder.markdown(full_response)
+                        st.session_state["chat_messages"].append(
+                            {"role": "assistant", "content": full_response}
+                        )
+                        # Limpiar los PDFs después de enviar para no
+                        # re-enviarlos en el próximo turno (ya no hace falta
+                        # que viajen junto a cada mensaje del cliente).
+                        if _ultimo_msg.get("_pdf_attachments"):
+                            _ultimo_msg["_pdf_attachments"] = None
+                    except Exception as e:
+                        st.error(f"Error al consultar Claude: {e}")
+
+        # Mini-formulario "Recordar" que aparece cuando se clickeó un botón
+        if st.session_state.get("recordando_msg_idx") is not None:
+            idx_rec = st.session_state["recordando_msg_idx"]
+            if 0 <= idx_rec < len(st.session_state["chat_messages"]):
+                msg_target = st.session_state["chat_messages"][idx_rec]
+                # Sugerencia: si es respuesta del agente, también incluir contexto
+                #   del mensaje user previo para entender qué se está recordando
+                sugerencia = msg_target["content"]
+                if msg_target["role"] == "assistant" and idx_rec > 0:
+                    user_prev = st.session_state["chat_messages"][idx_rec - 1]
+                    sugerencia = (
+                        f"En respuesta a: «{user_prev['content'][:200]}»\n\n"
+                        f"Apliqué/concluyó: {msg_target['content']}"
+                    )
+
+                st.divider()
+                st.markdown("##### 💾 Guardar como memoria del agente")
+                with st.form("guardar_memoria_inline", clear_on_submit=False):
+                    rec_categoria = st.selectbox(
+                        "Categoría",
+                        ["correccion", "valor_local", "ingrediente",
+                         "manejo", "cliente", "preferencia", "general"],
+                        format_func=lambda x: {
+                            "correccion": "🔧 Corrección técnica",
+                            "valor_local": "📍 Valor típico de la zona",
+                            "ingrediente": "🌾 Composición de ingrediente",
+                            "manejo": "⚙️ Característica de manejo",
+                            "cliente": "👤 Info de cliente",
+                            "preferencia": "❤️ Preferencia personal",
+                            "general": "📝 Otra",
+                        }[x],
+                        key="rec_cat",
+                    )
+                    rec_texto = st.text_area(
+                        "Texto a recordar (editá si querés acortarlo o reformular)",
+                        value=sugerencia,
+                        height=120,
+                        key="rec_txt",
+                        help="Escribí lo más conciso posible. "
+                             "Pensá: ¿qué regla / valor / criterio quiero "
+                             "que el agente recuerde la próxima vez?",
+                    )
+                    rec_etiq = st.text_input(
+                        "Etiqueta (opcional, p. ej. 'silaje', 'feedlot terminación')",
+                        key="rec_etq",
+                    )
+                    col_g1, col_g2 = st.columns(2)
+                    with col_g1:
+                        if st.form_submit_button("✅ Guardar", type="primary",
+                                                  width="stretch"):
+                            memoria.agregar_memoria(rec_texto, rec_categoria, rec_etiq)
+                            st.session_state["recordando_msg_idx"] = None
+                            st.success("✅ Memoria guardada — se aplica desde el próximo chat")
+                            # Rerun de APP completa (no fragment): la memoria
+                            # nueva tiene que verse en el expander "🧠 Memoria
+                            # del agente" y en Configuración, que viven fuera
+                            # del fragment del chat.
+                            st.rerun()
+                    with col_g2:
+                        if st.form_submit_button("✖ Cancelar",
+                                                  width="stretch"):
+                            st.session_state["recordando_msg_idx"] = None
+                            st.rerun(scope="fragment")
+
+        # =========== Mini-form PDF de respuesta del agente ===========
+        if st.session_state.get("pdf_chat_idx") is not None:
+            idx_pdf = st.session_state["pdf_chat_idx"]
+            if 0 <= idx_pdf < len(st.session_state["chat_messages"]):
+                msg_pdf = st.session_state["chat_messages"][idx_pdf]
+                st.divider()
+                st.markdown("##### 📄 Generar PDF profesional con marca HMS")
+
+                # ─── Inferir título por contenido ───
+                # Antes el default era siempre "Plan de alimentación" — pero
+                # el agente genera muchos otros tipos de informe (manejo
+                # ante frío/calor, plan de adaptación, prevención sanitaria,
+                # análisis nutricional, etc.). Detectamos por keywords para
+                # proponer un título coherente con el cuerpo del mensaje.
+                def _inferir_titulo(texto_md: str) -> str:
+                    t = (texto_md or "").lower()
+                    # Orden importa: el primer match gana
+                    reglas = [
+                        (
+                            ("plan de adaptación", "adaptación de 4 fases",
+                             "fase 1", "fase 2", "fase 3", "fase 4",
+                             "adaptación al concentrado"),
+                            "Plan de adaptación",
+                        ),
+                        (
+                            ("estrés calórico", "estrés térmico calor",
+                             "thi alto", "ola de calor"),
+                            "Manejo ante estrés calórico",
+                        ),
+                        (
+                            ("estrés por frío", "frío sostenido",
+                             "wind chill", "reparo del viento",
+                             "cama seca", "termorregulación",
+                             "clima frío", "ola de frío"),
+                            "Manejo ante frío y clima adverso",
+                        ),
+                        (
+                            ("situación climática", "próximos 7 días",
+                             "pronóstico", "clima de los próximos",
+                             "lluvia prevista"),
+                            "Recomendaciones de manejo climático",
+                        ),
+                        (
+                            ("acidosis", "timpanismo", "diarrea",
+                             "neumonía", "sanitaria", "patología"),
+                            "Recomendaciones sanitarias",
+                        ),
+                        (
+                            ("optimización de dieta", "optimizador",
+                             "mínimo costo", "costo de ración"),
+                            "Optimización de dieta",
+                        ),
+                        (
+                            ("análisis nutricional", "balance de raciones",
+                             "% pb", "em mcal", "ndt %"),
+                            "Análisis nutricional",
+                        ),
+                        (
+                            ("plan de alimentación", "fórmula",
+                             "ración", "ingredientes", "fibrogreen",
+                             "kg/animal/día", "mezcla concentrada"),
+                            "Plan de alimentación",
+                        ),
+                    ]
+                    for kws, titulo in reglas:
+                        for k in kws:
+                            if k in t:
+                                return titulo
+                    return "Informe técnico"
+
+                _titulo_sugerido = _inferir_titulo(msg_pdf.get("content", ""))
+
+                # ─── Badge de estado: ¿la dieta del lote está guardada? ───
+                # Sin dieta guardada en el historial del lote, las alertas
+                # (stock, silo, cambio de fase) y la demanda consolidada NO
+                # tienen de dónde leer. Mostramos el estado antes de generar
+                # el PDF para que el asesor lo confirme.
+                if lote_para_ia_id:
+                    _dietas_lote = db.listar_dietas(lote_para_ia_id)
+                    if _dietas_lote:
+                        st.success(
+                            f"✅ Este lote tiene **{len(_dietas_lote)} "
+                            f"dieta(s) guardada(s)** en el historial. "
+                            f"Las alertas de stock, silo y cambio de fase "
+                            f"van a funcionar con esos datos."
+                        )
+                    else:
+                        st.error(
+                            "⚠️ **Este lote NO tiene dietas guardadas en el "
+                            "historial.** Si generás el PDF así, queda como "
+                            "documento pero las alertas (stock bajo, fin "
+                            "de carga del silo, cambio de fase) y la vista "
+                            "de demanda consolidada **NO** van a poder "
+                            "calcular nada para este cliente.\n\n"
+                            "Antes de generar el PDF, volvé al chat y "
+                            "pedile al agente:\n"
+                            "*\"Guardá la dieta (o el plan de adaptación) "
+                            "en la ficha del lote\"*."
+                        )
+                else:
+                    st.info(
+                        "ℹ️ Estás generando un PDF sin lote asociado en el "
+                        "contexto. El PDF queda como documento autónomo — "
+                        "no se conecta con ningún lote del sistema."
+                    )
+
+                # Sugerir datos desde el contexto si los hay
+                cliente_default = ""
+                estab_default = ""
+                lote_default = ""
+                raza_default = ""
+                cat_default = ""
+                cant_default = 0
+                peso_default = 0.0
+                if lote_para_ia_id:
                     lote_data = db.obtener_lote(lote_para_ia_id)
                     if lote_data:
-                        cli = db.obtener_cliente(lote_data["cliente_id"])
-                        if cli and cli.get("localidad"):
-                            try:
-                                ctx_clima = resumen_clima_para_ia(
-                                    cli["localidad"],
-                                    categoria=lote_data.get("categoria", ""),
-                                )
-                                if ctx_clima:
-                                    _partes_ctx.append(ctx_clima)
-                                # Si el cliente está en La Pampa, sumar
-                                # estación oficial (datos reales gobierno)
-                                if cli.get("lat") and cli.get("lon"):
-                                    try:
-                                        ctx_oficial = resumen_estacion_oficial(
-                                            float(cli["lat"]), float(cli["lon"]),
-                                        )
-                                        if ctx_oficial:
-                                            _partes_ctx.append(ctx_oficial)
-                                    except Exception:
-                                        pass
-                            except Exception as e:
-                                logging.warning(f"Clima no disponible: {e}")
-                    ctx_pesado = "\n\n".join(
-                        p.strip() for p in _partes_ctx if p
-                    ).strip()
-                    st.session_state["_ctx_ia_cache"] = {
-                        "lote_id": lote_para_ia_id,
-                        "ts": datetime.now(),
-                        "texto": ctx_pesado,
-                    }
-                if ctx_pesado:
-                    contexto = (contexto + "\n\n" + ctx_pesado).strip()
-            ctx_ingredientes = construir_contexto_ingredientes(st.session_state)
-            with st.chat_message("assistant"):
-                placeholder = st.empty()
-                full_response = ""
-                try:
-                    # Pasar ingredientes en formato dict para tool use
-                    ings_data = None
-                    if "ingredientes_df" in st.session_state:
+                        cliente_default = lote_data.get("cliente_nombre", "") or ""
+                        estab_default = lote_data.get("establecimiento", "") or ""
+                        lote_default = lote_data.get("identificador", "") or ""
+                        raza_default = lote_data.get("raza", "") or ""
+                        cat_default = lote_data.get("categoria", "") or ""
+                        cant_default = int(lote_data.get("cantidad_inicial", 0) or 0)
+                        peso_default = float(lote_data.get("peso_ingreso_kg", 0) or 0)
+
+                # Si no hay lote contextual pero sí video procesado, usar esos datos
+                if not cant_default and st.session_state.get("vid_n"):
+                    cant_default = int(st.session_state["vid_n"])
+                if not peso_default and st.session_state.get("vid_prom"):
+                    peso_default = float(st.session_state["vid_prom"])
+
+                with st.form("generar_pdf_chat"):
+                    st.markdown("##### Datos para la carátula")
+                    col_pdf1, col_pdf2 = st.columns(2)
+                    with col_pdf1:
+                        pdf_titulo = st.text_input(
+                            "Título del informe",
+                            value=_titulo_sugerido,
+                            help=(
+                                "Sugerido a partir del contenido de la "
+                                "respuesta. Editalo si querés otro título."
+                            ),
+                        )
+                        pdf_cliente = st.text_input("Cliente", value=cliente_default)
+                        pdf_estab = st.text_input("Establecimiento", value=estab_default)
+                        pdf_lote = st.text_input("Identificación del lote", value=lote_default)
+                    with col_pdf2:
+                        pdf_fecha = st.date_input("Fecha", value=datetime.now().date())
+                        pdf_raza = st.text_input("Raza", value=raza_default)
+                        pdf_cat = st.text_input("Categoría", value=cat_default)
+                        col_p1, col_p2 = st.columns(2)
+                        pdf_cant = col_p1.number_input(
+                            "Cantidad", min_value=0, value=cant_default, step=1,
+                        )
+                        pdf_peso = col_p2.number_input(
+                            "Peso prom (kg)", min_value=0.0, value=peso_default, step=1.0,
+                        )
+
+                    pdf_objetivo = st.text_input(
+                        "Objetivo productivo (opcional)",
+                        placeholder="Ej: ADG 0.8 kg/día — Servicio a 15 meses",
+                    )
+
+                    pdf_contenido = st.text_area(
+                        "Contenido del informe (editable, en markdown)",
+                        value=msg_pdf["content"],
+                        height=300,
+                        help="Podés editar el texto antes de generar el PDF. "
+                             "Markdown soportado: # ## ### títulos, listas, tablas, **bold**.",
+                    )
+
+                    col_pdf_btn1, col_pdf_btn2 = st.columns(2)
+                    generar = col_pdf_btn1.form_submit_button(
+                        "📄 Generar PDF", type="primary", width="stretch",
+                    )
+                    cancelar = col_pdf_btn2.form_submit_button(
+                        "✖ Cancelar", width="stretch",
+                    )
+
+                    if generar:
                         try:
-                            ings_data = st.session_state["ingredientes_df"].to_dict("records")
-                        except Exception:
-                            ings_data = None
-
-                    # PDFs adjuntos al último mensaje del usuario
-                    _pdfs_envio = None
-                    _ultimo_msg = st.session_state["chat_messages"][-1]
-                    if _ultimo_msg.get("role") == "user":
-                        _pdfs_envio = _ultimo_msg.get("_pdf_attachments")
-                        if _pdfs_envio:
-                            placeholder.markdown(
-                                f"📎 *Procesando "
-                                f"{len(_pdfs_envio)} PDF(s)…*"
+                            _nombre_pdf_chat = armar_nombre_pdf(
+                                cliente=pdf_cliente,
+                                categoria=pdf_cat,
+                                objetivo=pdf_objetivo,
+                                lote=pdf_lote,
+                                fecha=pdf_fecha,
+                                sufijo="informe",
                             )
-
-                    for chunk in chat_streaming(
-                        st.session_state["chat_messages"],
-                        contexto_lote=contexto,
-                        contexto_ingredientes=ctx_ingredientes,
-                        ingredientes_session=ings_data,
-                        pdf_attachments=_pdfs_envio,
-                        api_key=api_key,
-                        model=_modelo_ia,
-                    ):
-                        full_response += chunk
-                        placeholder.markdown(full_response + "▌")
-                    placeholder.markdown(full_response)
-                    st.session_state["chat_messages"].append(
-                        {"role": "assistant", "content": full_response}
-                    )
-                    # Limpiar los PDFs después de enviar para no
-                    # re-enviarlos en el próximo turno (ya no hace falta
-                    # que viajen junto a cada mensaje del cliente).
-                    if _ultimo_msg.get("_pdf_attachments"):
-                        _ultimo_msg["_pdf_attachments"] = None
-                except Exception as e:
-                    st.error(f"Error al consultar Claude: {e}")
-
-    # Mini-formulario "Recordar" que aparece cuando se clickeó un botón
-    if st.session_state.get("recordando_msg_idx") is not None:
-        idx_rec = st.session_state["recordando_msg_idx"]
-        if 0 <= idx_rec < len(st.session_state["chat_messages"]):
-            msg_target = st.session_state["chat_messages"][idx_rec]
-            # Sugerencia: si es respuesta del agente, también incluir contexto
-            #   del mensaje user previo para entender qué se está recordando
-            sugerencia = msg_target["content"]
-            if msg_target["role"] == "assistant" and idx_rec > 0:
-                user_prev = st.session_state["chat_messages"][idx_rec - 1]
-                sugerencia = (
-                    f"En respuesta a: «{user_prev['content'][:200]}»\n\n"
-                    f"Apliqué/concluyó: {msg_target['content']}"
-                )
-
-            st.divider()
-            st.markdown("##### 💾 Guardar como memoria del agente")
-            with st.form("guardar_memoria_inline", clear_on_submit=False):
-                rec_categoria = st.selectbox(
-                    "Categoría",
-                    ["correccion", "valor_local", "ingrediente",
-                     "manejo", "cliente", "preferencia", "general"],
-                    format_func=lambda x: {
-                        "correccion": "🔧 Corrección técnica",
-                        "valor_local": "📍 Valor típico de la zona",
-                        "ingrediente": "🌾 Composición de ingrediente",
-                        "manejo": "⚙️ Característica de manejo",
-                        "cliente": "👤 Info de cliente",
-                        "preferencia": "❤️ Preferencia personal",
-                        "general": "📝 Otra",
-                    }[x],
-                    key="rec_cat",
-                )
-                rec_texto = st.text_area(
-                    "Texto a recordar (editá si querés acortarlo o reformular)",
-                    value=sugerencia,
-                    height=120,
-                    key="rec_txt",
-                    help="Escribí lo más conciso posible. "
-                         "Pensá: ¿qué regla / valor / criterio quiero "
-                         "que el agente recuerde la próxima vez?",
-                )
-                rec_etiq = st.text_input(
-                    "Etiqueta (opcional, p. ej. 'silaje', 'feedlot terminación')",
-                    key="rec_etq",
-                )
-                col_g1, col_g2 = st.columns(2)
-                with col_g1:
-                    if st.form_submit_button("✅ Guardar", type="primary",
-                                              width="stretch"):
-                        memoria.agregar_memoria(rec_texto, rec_categoria, rec_etiq)
-                        st.session_state["recordando_msg_idx"] = None
-                        st.success("✅ Memoria guardada — se aplica desde el próximo chat")
-                        st.rerun()
-                with col_g2:
-                    if st.form_submit_button("✖ Cancelar",
-                                              width="stretch"):
-                        st.session_state["recordando_msg_idx"] = None
-                        st.rerun()
-
-    # =========== Mini-form PDF de respuesta del agente ===========
-    if st.session_state.get("pdf_chat_idx") is not None:
-        idx_pdf = st.session_state["pdf_chat_idx"]
-        if 0 <= idx_pdf < len(st.session_state["chat_messages"]):
-            msg_pdf = st.session_state["chat_messages"][idx_pdf]
-            st.divider()
-            st.markdown("##### 📄 Generar PDF profesional con marca HMS")
-
-            # ─── Inferir título por contenido ───
-            # Antes el default era siempre "Plan de alimentación" — pero
-            # el agente genera muchos otros tipos de informe (manejo
-            # ante frío/calor, plan de adaptación, prevención sanitaria,
-            # análisis nutricional, etc.). Detectamos por keywords para
-            # proponer un título coherente con el cuerpo del mensaje.
-            def _inferir_titulo(texto_md: str) -> str:
-                t = (texto_md or "").lower()
-                # Orden importa: el primer match gana
-                reglas = [
-                    (
-                        ("plan de adaptación", "adaptación de 4 fases",
-                         "fase 1", "fase 2", "fase 3", "fase 4",
-                         "adaptación al concentrado"),
-                        "Plan de adaptación",
-                    ),
-                    (
-                        ("estrés calórico", "estrés térmico calor",
-                         "thi alto", "ola de calor"),
-                        "Manejo ante estrés calórico",
-                    ),
-                    (
-                        ("estrés por frío", "frío sostenido",
-                         "wind chill", "reparo del viento",
-                         "cama seca", "termorregulación",
-                         "clima frío", "ola de frío"),
-                        "Manejo ante frío y clima adverso",
-                    ),
-                    (
-                        ("situación climática", "próximos 7 días",
-                         "pronóstico", "clima de los próximos",
-                         "lluvia prevista"),
-                        "Recomendaciones de manejo climático",
-                    ),
-                    (
-                        ("acidosis", "timpanismo", "diarrea",
-                         "neumonía", "sanitaria", "patología"),
-                        "Recomendaciones sanitarias",
-                    ),
-                    (
-                        ("optimización de dieta", "optimizador",
-                         "mínimo costo", "costo de ración"),
-                        "Optimización de dieta",
-                    ),
-                    (
-                        ("análisis nutricional", "balance de raciones",
-                         "% pb", "em mcal", "ndt %"),
-                        "Análisis nutricional",
-                    ),
-                    (
-                        ("plan de alimentación", "fórmula",
-                         "ración", "ingredientes", "fibrogreen",
-                         "kg/animal/día", "mezcla concentrada"),
-                        "Plan de alimentación",
-                    ),
-                ]
-                for kws, titulo in reglas:
-                    for k in kws:
-                        if k in t:
-                            return titulo
-                return "Informe técnico"
-
-            _titulo_sugerido = _inferir_titulo(msg_pdf.get("content", ""))
-
-            # ─── Badge de estado: ¿la dieta del lote está guardada? ───
-            # Sin dieta guardada en el historial del lote, las alertas
-            # (stock, silo, cambio de fase) y la demanda consolidada NO
-            # tienen de dónde leer. Mostramos el estado antes de generar
-            # el PDF para que el asesor lo confirme.
-            if lote_para_ia_id:
-                _dietas_lote = db.listar_dietas(lote_para_ia_id)
-                if _dietas_lote:
-                    st.success(
-                        f"✅ Este lote tiene **{len(_dietas_lote)} "
-                        f"dieta(s) guardada(s)** en el historial. "
-                        f"Las alertas de stock, silo y cambio de fase "
-                        f"van a funcionar con esos datos."
-                    )
-                else:
-                    st.error(
-                        "⚠️ **Este lote NO tiene dietas guardadas en el "
-                        "historial.** Si generás el PDF así, queda como "
-                        "documento pero las alertas (stock bajo, fin "
-                        "de carga del silo, cambio de fase) y la vista "
-                        "de demanda consolidada **NO** van a poder "
-                        "calcular nada para este cliente.\n\n"
-                        "Antes de generar el PDF, volvé al chat y "
-                        "pedile al agente:\n"
-                        "*\"Guardá la dieta (o el plan de adaptación) "
-                        "en la ficha del lote\"*."
-                    )
-            else:
-                st.info(
-                    "ℹ️ Estás generando un PDF sin lote asociado en el "
-                    "contexto. El PDF queda como documento autónomo — "
-                    "no se conecta con ningún lote del sistema."
-                )
-
-            # Sugerir datos desde el contexto si los hay
-            cliente_default = ""
-            estab_default = ""
-            lote_default = ""
-            raza_default = ""
-            cat_default = ""
-            cant_default = 0
-            peso_default = 0.0
-            if lote_para_ia_id:
-                lote_data = db.obtener_lote(lote_para_ia_id)
-                if lote_data:
-                    cliente_default = lote_data.get("cliente_nombre", "") or ""
-                    estab_default = lote_data.get("establecimiento", "") or ""
-                    lote_default = lote_data.get("identificador", "") or ""
-                    raza_default = lote_data.get("raza", "") or ""
-                    cat_default = lote_data.get("categoria", "") or ""
-                    cant_default = int(lote_data.get("cantidad_inicial", 0) or 0)
-                    peso_default = float(lote_data.get("peso_ingreso_kg", 0) or 0)
-
-            # Si no hay lote contextual pero sí video procesado, usar esos datos
-            if not cant_default and st.session_state.get("vid_n"):
-                cant_default = int(st.session_state["vid_n"])
-            if not peso_default and st.session_state.get("vid_prom"):
-                peso_default = float(st.session_state["vid_prom"])
-
-            with st.form("generar_pdf_chat"):
-                st.markdown("##### Datos para la carátula")
-                col_pdf1, col_pdf2 = st.columns(2)
-                with col_pdf1:
-                    pdf_titulo = st.text_input(
-                        "Título del informe",
-                        value=_titulo_sugerido,
-                        help=(
-                            "Sugerido a partir del contenido de la "
-                            "respuesta. Editalo si querés otro título."
-                        ),
-                    )
-                    pdf_cliente = st.text_input("Cliente", value=cliente_default)
-                    pdf_estab = st.text_input("Establecimiento", value=estab_default)
-                    pdf_lote = st.text_input("Identificación del lote", value=lote_default)
-                with col_pdf2:
-                    pdf_fecha = st.date_input("Fecha", value=datetime.now().date())
-                    pdf_raza = st.text_input("Raza", value=raza_default)
-                    pdf_cat = st.text_input("Categoría", value=cat_default)
-                    col_p1, col_p2 = st.columns(2)
-                    pdf_cant = col_p1.number_input(
-                        "Cantidad", min_value=0, value=cant_default, step=1,
-                    )
-                    pdf_peso = col_p2.number_input(
-                        "Peso prom (kg)", min_value=0.0, value=peso_default, step=1.0,
-                    )
-
-                pdf_objetivo = st.text_input(
-                    "Objetivo productivo (opcional)",
-                    placeholder="Ej: ADG 0.8 kg/día — Servicio a 15 meses",
-                )
-
-                pdf_contenido = st.text_area(
-                    "Contenido del informe (editable, en markdown)",
-                    value=msg_pdf["content"],
-                    height=300,
-                    help="Podés editar el texto antes de generar el PDF. "
-                         "Markdown soportado: # ## ### títulos, listas, tablas, **bold**.",
-                )
-
-                col_pdf_btn1, col_pdf_btn2 = st.columns(2)
-                generar = col_pdf_btn1.form_submit_button(
-                    "📄 Generar PDF", type="primary", width="stretch",
-                )
-                cancelar = col_pdf_btn2.form_submit_button(
-                    "✖ Cancelar", width="stretch",
-                )
-
-                if generar:
-                    try:
-                        _nombre_pdf_chat = armar_nombre_pdf(
-                            cliente=pdf_cliente,
-                            categoria=pdf_cat,
-                            objetivo=pdf_objetivo,
-                            lote=pdf_lote,
-                            fecha=pdf_fecha,
-                            sufijo="informe",
-                        )
-                        out_path = (Path(tempfile.mkdtemp())
-                                    / _nombre_pdf_chat)
-                        generar_pdf_informe_chat(
-                            out_path,
-                            contenido_markdown=pdf_contenido,
-                            titulo_default=pdf_titulo,
-                            cliente=pdf_cliente,
-                            establecimiento=pdf_estab,
-                            lote=pdf_lote,
-                            raza=pdf_raza,
-                            categoria=pdf_cat,
-                            cantidad=int(pdf_cant),
-                            peso_kg=float(pdf_peso),
-                            objetivo=pdf_objetivo,
-                            fecha=datetime.combine(pdf_fecha, datetime.min.time()),
-                        )
-                        with open(out_path, "rb") as fh:
-                            st.session_state["pdf_chat_bytes"] = fh.read()
-                        st.session_state["pdf_chat_filename"] = out_path.name
+                            out_path = (Path(tempfile.mkdtemp())
+                                        / _nombre_pdf_chat)
+                            generar_pdf_informe_chat(
+                                out_path,
+                                contenido_markdown=pdf_contenido,
+                                titulo_default=pdf_titulo,
+                                cliente=pdf_cliente,
+                                establecimiento=pdf_estab,
+                                lote=pdf_lote,
+                                raza=pdf_raza,
+                                categoria=pdf_cat,
+                                cantidad=int(pdf_cant),
+                                peso_kg=float(pdf_peso),
+                                objetivo=pdf_objetivo,
+                                fecha=datetime.combine(pdf_fecha, datetime.min.time()),
+                            )
+                            with open(out_path, "rb") as fh:
+                                st.session_state["pdf_chat_bytes"] = fh.read()
+                            st.session_state["pdf_chat_filename"] = out_path.name
+                            st.session_state["pdf_chat_idx"] = None
+                            st.success("✅ PDF generado")
+                            st.rerun(scope="fragment")
+                        except Exception as e:
+                            st.error(f"Error generando PDF: {e}")
+                            st.exception(e)
+                    if cancelar:
                         st.session_state["pdf_chat_idx"] = None
-                        st.success("✅ PDF generado")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error generando PDF: {e}")
-                        st.exception(e)
-                if cancelar:
-                    st.session_state["pdf_chat_idx"] = None
-                    st.rerun()
+                        st.rerun(scope="fragment")
 
-    # Botón de descarga si recién se generó
-    if st.session_state.get("pdf_chat_bytes"):
-        st.download_button(
-            "⬇️ Descargar PDF generado",
-            data=st.session_state["pdf_chat_bytes"],
-            file_name=st.session_state.get("pdf_chat_filename", "informe.pdf"),
-            mime="application/pdf",
-            key="dl_chat_pdf",
-        )
+        # Botón de descarga si recién se generó
+        if st.session_state.get("pdf_chat_bytes"):
+            st.download_button(
+                "⬇️ Descargar PDF generado",
+                data=st.session_state["pdf_chat_bytes"],
+                file_name=st.session_state.get("pdf_chat_filename", "informe.pdf"),
+                mime="application/pdf",
+                key="dl_chat_pdf",
+            )
 
-    # 3) Info de contexto (opcional, expander)
-    with st.expander("🔍 Ver el contexto completo que la IA recibe"):
-        partes = []
-        ctx_lote = construir_contexto_lote(st.session_state)
-        if ctx_lote:
-            partes.append(ctx_lote)
-        if lote_para_ia_id:
-            ctx_h = db.resumen_lote_para_ia(lote_para_ia_id)
-            if ctx_h:
-                partes.append(ctx_h)
-        ctx_ings = construir_contexto_ingredientes(st.session_state)
-        if ctx_ings:
-            partes.append(ctx_ings)
-        bloque_mem = memoria.construir_bloque_memoria()
-        if bloque_mem:
-            partes.append(bloque_mem)
-        ctx_completo = "\n\n".join(partes) if partes else "(sin contexto)"
-        st.code(ctx_completo, language="text")
+        # 3) Info de contexto (opcional, expander)
+        with st.expander("🔍 Ver el contexto completo que la IA recibe"):
+            partes = []
+            ctx_lote = construir_contexto_lote(st.session_state)
+            if ctx_lote:
+                partes.append(ctx_lote)
+            if lote_para_ia_id:
+                # Mismo cache de sesión que usa el chat: sin query extra
+                # por render, y muestra EXACTAMENTE lo que recibe la IA
+                # (histórico + clínico + clima).
+                ctx_h = _obtener_ctx_pesado_ia(lote_para_ia_id)
+                if ctx_h:
+                    partes.append(ctx_h)
+            ctx_ings = construir_contexto_ingredientes(st.session_state)
+            if ctx_ings:
+                partes.append(ctx_ings)
+            bloque_mem = memoria.construir_bloque_memoria()
+            if bloque_mem:
+                partes.append(bloque_mem)
+            ctx_completo = "\n\n".join(partes) if partes else "(sin contexto)"
+            st.code(ctx_completo, language="text")
 
-    # 4) Adjuntos PDF — para subir dietas formuladas, análisis de
-    # laboratorio o cualquier documento que el agente pueda leer.
-    with st.expander(
-        "📎 Adjuntar PDF al próximo mensaje "
-        "(dietas formuladas, análisis, informes…)",
-        expanded=False,
-    ):
-        st.caption(
-            "El agente puede leer PDFs directamente — extrae la dieta, "
-            "el análisis o la información del documento y la podés "
-            "guardar al lote. Útil para migrar fórmulas de Excel o "
-            "papel."
-        )
-        _pdfs_subidos = st.file_uploader(
-            "Subí uno o más PDFs",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key="chat_pdf_uploader",
-        )
-        if _pdfs_subidos:
-            for _f in _pdfs_subidos:
-                st.caption(
-                    f"📎 {_f.name} ({_f.size/1024:.0f} KB) — listo "
-                    f"para enviar con tu próximo mensaje."
-                )
+        # 4) Adjuntos PDF — para subir dietas formuladas, análisis de
+        # laboratorio o cualquier documento que el agente pueda leer.
+        with st.expander(
+            "📎 Adjuntar PDF al próximo mensaje "
+            "(dietas formuladas, análisis, informes…)",
+            expanded=False,
+        ):
+            st.caption(
+                "El agente puede leer PDFs directamente — extrae la dieta, "
+                "el análisis o la información del documento y la podés "
+                "guardar al lote. Útil para migrar fórmulas de Excel o "
+                "papel."
+            )
+            _pdfs_subidos = st.file_uploader(
+                "Subí uno o más PDFs",
+                type=["pdf"],
+                accept_multiple_files=True,
+                key="chat_pdf_uploader",
+            )
+            if _pdfs_subidos:
+                for _f in _pdfs_subidos:
+                    st.caption(
+                        f"📎 {_f.name} ({_f.size/1024:.0f} KB) — listo "
+                        f"para enviar con tu próximo mensaje."
+                    )
 
-    # 5) Input del usuario AL FINAL — debajo del último mensaje
-    user_input = st.chat_input("Hacé tu pregunta o pedido…")
-    if user_input:
-        # Si hay PDFs adjuntos en el uploader, capturarlos AHORA
-        # (bytes + nombre) y mandarlos junto con el mensaje. Después
-        # los limpiamos para no re-enviarlos en el siguiente turno.
-        _pdfs_para_msg = []
-        try:
-            _archivos = st.session_state.get("chat_pdf_uploader") or []
-            for _f in _archivos:
-                _pdfs_para_msg.append({
-                    "filename": _f.name,
-                    "data": _f.getvalue(),
-                })
-        except Exception:
+        # 5) Input del usuario AL FINAL — debajo del último mensaje
+        user_input = st.chat_input("Hacé tu pregunta o pedido…")
+        if user_input:
+            # Si hay PDFs adjuntos en el uploader, capturarlos AHORA
+            # (bytes + nombre) y mandarlos junto con el mensaje. Después
+            # los limpiamos para no re-enviarlos en el siguiente turno.
             _pdfs_para_msg = []
-        st.session_state["chat_messages"].append(
-            {
-                "role": "user",
-                "content": user_input,
-                "_pdf_attachments": _pdfs_para_msg or None,
-            }
-        )
-        st.rerun()
+            try:
+                _archivos = st.session_state.get("chat_pdf_uploader") or []
+                for _f in _archivos:
+                    _pdfs_para_msg.append({
+                        "filename": _f.name,
+                        "data": _f.getvalue(),
+                    })
+            except Exception:
+                _pdfs_para_msg = []
+            st.session_state["chat_messages"].append(
+                {
+                    "role": "user",
+                    "content": user_input,
+                    "_pdf_attachments": _pdfs_para_msg or None,
+                }
+            )
+            st.rerun(scope="fragment")
+
+    _chat_asesor_fragment()
 
 
 # ----------------------- ENTRENAMIENTO AVANZADO -----------------------

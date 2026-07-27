@@ -2747,9 +2747,20 @@ def chat_streaming(
             "=== CONTEXTO DEL LOTE ACTUAL ===\n" + contexto_lote
         )
     if partes_dinamicas:
+        # Segundo breakpoint de cache sobre el bloque "dinámico":
+        # memoria + ingredientes + contexto del lote son ESTABLES
+        # durante la sesión (la memoria solo cambia si el usuario
+        # aprieta "Recordar esto"; el contexto pesado del lote se
+        # cachea 10 min en session_state, así que llega byte-idéntico
+        # entre mensajes). Con este breakpoint, el prefijo COMPLETO
+        # del system se reusa del cache de Anthropic en cada mensaje.
+        # Si algo cambia (memoria nueva, TTL vencido), este breakpoint
+        # hace miss pero el primero (SYSTEM_PROMPT) sigue haciendo hit:
+        # solo se reprocesa esta cola. No pasa nada malo.
         system_blocks.append({
             "type": "text",
             "text": "\n\n".join(partes_dinamicas),
+            "cache_control": {"type": "ephemeral"},
         })
 
     formatted_messages = [
