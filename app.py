@@ -1568,12 +1568,12 @@ st.markdown("""
     div[data-testid="stTabs"] [role="tablist"] {
         gap: 4px !important;
         border-bottom: none !important;
-        padding: 6px !important;
+        padding: 5px !important;
         background: #22262b !important;
-        border-radius: 14px !important;
+        border-radius: 8px !important;
     }
     div[data-testid="stTabs"] [data-testid="stTab"] {
-        border-radius: 10px !important;
+        border-radius: 5px !important;
         padding: 11px 20px !important;
         height: auto !important;
         border: none !important;
@@ -1598,7 +1598,7 @@ st.markdown("""
         background: #f2f2f0 !important;
         background-color: #f2f2f0 !important;
         color: #1a1a18 !important;
-        box-shadow: inset 0 -3px 0 0 #8BC53F, 0 1px 4px rgba(0, 0, 0, 0.35);
+        box-shadow: inset 0 -5px 0 0 #8BC53F, 0 1px 4px rgba(0, 0, 0, 0.35);
     }
     div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] p {
         color: #1a1a18 !important;
