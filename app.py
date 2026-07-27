@@ -1598,7 +1598,7 @@ st.markdown("""
         background: #f2f2f0 !important;
         background-color: #f2f2f0 !important;
         color: #1a1a18 !important;
-        box-shadow: inset 0 -5px 0 0 #8BC53F, 0 1px 4px rgba(0, 0, 0, 0.35);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
     }
     div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] p {
         color: #1a1a18 !important;
@@ -1615,7 +1615,11 @@ st.markdown("""
     }
     /* Ocultar el indicador nativo (subrayado rojo): cualquier hijo del
        tablist que no sea una pestaña es el indicador. */
-    div[data-testid="stTabs"] [role="tablist"] > div:not([data-testid="stTab"]) {
+    div[data-testid="stTabs"] [role="tablist"] > *:not([data-testid="stTab"]) {
+        display: none !important;
+    }
+    div[data-testid="stTabs"] [data-testid="stTab"]::after,
+    div[data-testid="stTabs"] [data-testid="stTab"]::before {
         display: none !important;
     }
     /* Legacy (por si Streamlit vuelve a BaseWeb) */
@@ -1664,7 +1668,7 @@ if _logo_path_hdr.exists():
     _logo_html_hdr = (
         '<img src="data:image/png;base64,'
         f'{_b64_hdr.b64encode(_logo_path_hdr.read_bytes()).decode()}" '
-        'style="width:44px;height:44px;object-fit:contain;" />'
+        'style="width:68px;height:68px;object-fit:contain;" />'
     )
 
 st.markdown(
@@ -1672,12 +1676,12 @@ st.markdown(
     f'justify-content:space-between;align-items:center;'
     f'padding:10px 0;border-bottom:1px solid rgba(128,128,128,0.25);'
     f'margin-bottom:8px;">'
-    f'<div style="display:flex;align-items:center;gap:10px;">'
+    f'<div style="display:flex;align-items:center;gap:14px;">'
     f'{_logo_html_hdr}'
     f'<div>'
-    f'<div style="font-size:18px;font-weight:600;color:#8BC53F;'
-    f'line-height:1.2;">HMS Nutrición Animal</div>'
-    f'<div style="font-size:12px;color:#8a8f98;">'
+    f'<div style="font-size:26px;font-weight:700;color:#8BC53F;'
+    f'line-height:1.15;letter-spacing:0.01em;">HMS Nutrición Animal</div>'
+    f'<div style="font-size:14px;color:#9aa0a8;">'
     f'Asesoría nutricional a campo</div>'
     f'</div></div>'
     f'<div style="text-align:right;">'
