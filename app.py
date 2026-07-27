@@ -1562,10 +1562,31 @@ st.markdown("""
         color: #1B3E27;
         border: 2px solid #1B3E27;
     }
-    /* Tabs activos en lima */
-    .stTabs [aria-selected="true"] {
-        color: #1B3E27 !important;
-        border-bottom: 3px solid #8BC53F !important;
+    /* Barra de pestañas principal — estilo HMS */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 6px;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+        background: transparent;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-size: 0.88rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        padding-left: 14px;
+        padding-right: 14px;
+        color: rgba(128, 132, 138, 0.95);
+        border: none;
+        background: transparent;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        color: rgba(139, 197, 63, 0.85);
+    }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        color: #8BC53F !important;
+    }
+    .stTabs [data-baseweb="tab-highlight"] {
+        background-color: #8BC53F;
+        height: 3px;
     }
     /* Métricas */
     [data-testid="stMetricValue"] { color: #1B3E27; }
@@ -1942,27 +1963,19 @@ else:
 # ---------------------------------------------------------------------
 (tab_inicio, tab_clientes, tab_img, tab_vid, tab_evo, tab_avanzado,
  tab_ia, tab_historial, tab_config, tab_train, tab_help) = st.tabs([
-    "🏠 Inicio",
-    "🏢 Clientes/Lotes",
-    "📷 Imagen 🐄",
-    "🎞️ Video 🐄",
-    "📈 Evolución 🐄",
-    "🔬 Análisis 🍽️",
-    "🤖 Asesor IA 🍽️",
-    "📚 Historial",
-    "⚙️ Configuración",
-    "🎓 Entrenamiento 🐄",
-    "ℹ️ Ayuda",
+    "Inicio",
+    "Clientes/Lotes",
+    "Imagen",
+    "Video",
+    "Evolución",
+    "Análisis",
+    "Asesor IA",
+    "Historial",
+    "Configuración",
+    "Entrenamiento",
+    "Ayuda",
 ])
 
-# Leyenda de los íconos en cada pestaña
-st.markdown(
-    "<div style='font-size:0.85em;color:#666;margin-top:-15px;'>"
-    "<b>🐄 = Módulo Drone</b> (conteo y peso) &nbsp;·&nbsp; "
-    "<b>🍽️ = Módulo Asesor Nutricional</b> (NASEM 2016 + IA + alertas)"
-    "</div>",
-    unsafe_allow_html=True,
-)
 
 # ----------------------------- INICIO ---------------------------------
 with tab_inicio:
