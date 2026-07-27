@@ -2718,17 +2718,39 @@ def chat_streaming(
     from .agent_memory import construir_bloque_memoria
     client = get_anthropic_client(api_key)
 
-    # Construir el system prompt completo
-    # Inyectamos el contexto estacional ARRIBA del system prompt — es lo
-    # primero que ve el LLM, así no puede olvidarlo al final del prompt.
-    full_system = _contexto_estacional_hoy() + "\n\n" + SYSTEM_PROMPT
+    # Construir el system prompt en DOS bloques para PROMPT CACHING:
+    #   1) Bloque ESTÁTICO: contexto estacional del día + SYSTEM_PROMPT
+    #      completo, marcado con cache_control ephemeral. Anthropic
+    #      cachea el prefijo (tools + este bloque) ~5 min: los mensajes
+    #      siguientes de la conversación reusan el cache → mucha menos
+    #      latencia de "primer token" y ~90% menos costo de input en
+    #      esa porción. El bloque estacional solo cambia una vez por
+    #      día, así que NO rompe el cache dentro de una sesión.
+    #      (El orden estacional-primero se mantiene igual que antes.)
+    #   2) Bloque DINÁMICO: memoria del asesor + ingredientes +
+    #      contexto del lote, SIN cache_control, después del estático.
+    system_blocks = [
+        {
+            "type": "text",
+            "text": _contexto_estacional_hoy() + "\n\n" + SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    partes_dinamicas = []
     bloque_memoria = construir_bloque_memoria()
     if bloque_memoria:
-        full_system += "\n\n" + bloque_memoria
+        partes_dinamicas.append(bloque_memoria)
     if contexto_ingredientes:
-        full_system += "\n\n" + contexto_ingredientes
+        partes_dinamicas.append(contexto_ingredientes)
     if contexto_lote:
-        full_system += "\n\n=== CONTEXTO DEL LOTE ACTUAL ===\n" + contexto_lote
+        partes_dinamicas.append(
+            "=== CONTEXTO DEL LOTE ACTUAL ===\n" + contexto_lote
+        )
+    if partes_dinamicas:
+        system_blocks.append({
+            "type": "text",
+            "text": "\n\n".join(partes_dinamicas),
+        })
 
     formatted_messages = [
         {"role": m["role"], "content": m["content"]}
@@ -2784,32 +2806,48 @@ def chat_streaming(
                 })
                 ultimo["content"] = content_blocks
 
-    # Loop de tool use: hasta 5 ciclos para evitar bucle infinito
+    # Loop de tool use: hasta 5 ciclos para evitar bucle infinito.
+    # Cada ronda usa STREAMING REAL (client.messages.stream): el texto
+    # llega token a token en vez de esperar la respuesta completa —
+    # el usuario ve las primeras palabras en ~1-2 s.
     for _ in range(5):
-        try:
-            response = _llamar_con_retry(
-                lambda: client.messages.create(
+        response = None
+        for intento in range(4):
+            texto_emitido = False
+            try:
+                with client.messages.stream(
                     model=model,
                     max_tokens=max_tokens,
-                    system=full_system,
+                    system=system_blocks,
                     messages=formatted_messages,
                     tools=TOOLS_DEFINITIONS,
-                )
-            )
-        except Exception as _e_llm:
-            yield _formatear_error_llm(_e_llm)
+                ) as stream:
+                    for text in stream.text_stream:
+                        texto_emitido = True
+                        yield text
+                    response = stream.get_final_message()
+                break
+            except Exception as _e_llm:
+                # Backoff exponencial SOLO para 429 (rate limit) y solo
+                # si todavía no emitimos texto en esta ronda — si ya
+                # streameamos parte de la respuesta, reintentar la
+                # duplicaría. Sin saldo u otros errores: no reintentar.
+                if (not texto_emitido
+                        and not _es_credit_balance_error(_e_llm)
+                        and _es_rate_limit_error(_e_llm)
+                        and intento < 3):
+                    espera = 8.0 * (2 ** intento)
+                    espera += random.uniform(0, 4.0)
+                    time.sleep(espera)
+                    continue
+                yield _formatear_error_llm(_e_llm)
+                return
+        if response is None:
             return
 
-        # Stream del contenido de texto
-        text_blocks = []
-        tool_uses = []
-        for block in response.content:
-            if block.type == "text":
-                text_blocks.append(block.text)
-                # Yield directamente para mantener UX de streaming
-                yield block.text
-            elif block.type == "tool_use":
-                tool_uses.append(block)
+        # El texto ya se streameó token a token arriba; acá solo
+        # separamos los pedidos de herramientas.
+        tool_uses = [b for b in response.content if b.type == "tool_use"]
 
         if not tool_uses:
             # No pidió ejecutar herramientas, terminamos
@@ -2848,9 +2886,20 @@ def chat_non_streaming(
     client = get_anthropic_client(api_key)
     # Inyectamos el contexto estacional ARRIBA del system prompt — es lo
     # primero que ve el LLM, así no puede olvidarlo al final del prompt.
-    full_system = _contexto_estacional_hoy() + "\n\n" + SYSTEM_PROMPT
+    # Bloque estático con prompt caching + bloque dinámico aparte
+    # (mismo esquema que chat_streaming).
+    full_system = [
+        {
+            "type": "text",
+            "text": _contexto_estacional_hoy() + "\n\n" + SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
     if contexto_lote:
-        full_system += "\n\n=== CONTEXTO DEL LOTE ACTUAL ===\n" + contexto_lote
+        full_system.append({
+            "type": "text",
+            "text": "=== CONTEXTO DEL LOTE ACTUAL ===\n" + contexto_lote,
+        })
 
     formatted_messages = [
         {"role": m["role"], "content": m["content"]}

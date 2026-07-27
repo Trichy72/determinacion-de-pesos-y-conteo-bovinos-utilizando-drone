@@ -14560,7 +14560,17 @@ with tab_ia:
         )  # alinear con el selectbox
         if st.button("🗑️ Nuevo chat", width="stretch"):
             st.session_state["chat_messages"] = []
+            st.session_state.pop("_ctx_ia_cache", None)
             st.rerun()
+        if st.button(
+            "🔄 Actualizar contexto", width="stretch",
+            help="El contexto del lote (histórico, clínico, clima) se "
+                 "cachea 10 min para que el agente responda más rápido. "
+                 "Apretá acá si cargaste datos nuevos y querés que el "
+                 "agente los vea ya.",
+        ):
+            st.session_state.pop("_ctx_ia_cache", None)
+            st.toast("Contexto del lote actualizado ✅")
 
     if not st.session_state["chat_messages"]:
         st.markdown("**💡 Sugerencias para empezar:**")
@@ -14647,54 +14657,77 @@ with tab_ia:
                 and st.session_state["chat_messages"][-1]["role"] == "user"):
             contexto = construir_contexto_lote(st.session_state)
             if lote_para_ia_id:
-                ctx_historico = db.resumen_lote_para_ia(lote_para_ia_id)
-                if ctx_historico:
-                    contexto = (contexto + "\n\n" + ctx_historico).strip()
-                # ─── Histórico clínico completo (unificado con el
-                # análisis climático del lote): mortandad por causa,
-                # patrones recurrentes, diagnósticos abiertos, ADG
-                # real, sub-consumo medido, fase del plan, últimas
-                # consultas. Hace que el chat conversacional vea lo
-                # mismo que el botón "🤖 Generar análisis IA".
-                try:
-                    ctx_clinico = (
-                        dashboard.armar_contexto_clinico_lote(
-                            lote_para_ia_id, db,
-                        )
-                    )
-                    if ctx_clinico:
-                        contexto = (
-                            contexto + "\n\n" + ctx_clinico
-                        ).strip()
-                except Exception:
-                    pass
-                # Si el cliente del lote tiene localidad, sumar clima + alertas
-                lote_data = db.obtener_lote(lote_para_ia_id)
-                if lote_data:
-                    cli = db.obtener_cliente(lote_data["cliente_id"])
-                    if cli and cli.get("localidad"):
-                        try:
-                            ctx_clima = resumen_clima_para_ia(
-                                cli["localidad"],
-                                categoria=lote_data.get("categoria", ""),
+                # ─── PERFORMANCE: el contexto "pesado" del lote
+                # (histórico DB + clínico + clima + estación oficial)
+                # implica 5-8 queries a Supabase (~200 ms c/u) + APIs
+                # de clima. Antes se reconstruía en CADA mensaje del
+                # chat; ahora se cachea en session_state por lote con
+                # TTL de 10 min. Se invalida al cambiar de lote, por
+                # TTL, o con el botón "🔄 Actualizar contexto".
+                _ctx_cache = st.session_state.get("_ctx_ia_cache") or {}
+                _ctx_vigente = (
+                    _ctx_cache.get("lote_id") == lote_para_ia_id
+                    and isinstance(_ctx_cache.get("ts"), datetime)
+                    and (datetime.now() - _ctx_cache["ts"]).total_seconds() < 600
+                )
+                if _ctx_vigente:
+                    ctx_pesado = _ctx_cache.get("texto", "")
+                else:
+                    _partes_ctx = []
+                    ctx_historico = db.resumen_lote_para_ia(lote_para_ia_id)
+                    if ctx_historico:
+                        _partes_ctx.append(ctx_historico)
+                    # ─── Histórico clínico completo (unificado con el
+                    # análisis climático del lote): mortandad por causa,
+                    # patrones recurrentes, diagnósticos abiertos, ADG
+                    # real, sub-consumo medido, fase del plan, últimas
+                    # consultas. Hace que el chat conversacional vea lo
+                    # mismo que el botón "🤖 Generar análisis IA".
+                    try:
+                        ctx_clinico = (
+                            dashboard.armar_contexto_clinico_lote(
+                                lote_para_ia_id, db,
                             )
-                            if ctx_clima:
-                                contexto = (contexto + "\n\n" + ctx_clima).strip()
-                            # Si el cliente está en La Pampa, sumar
-                            # estación oficial (datos reales gobierno)
-                            if cli.get("lat") and cli.get("lon"):
-                                try:
-                                    ctx_oficial = resumen_estacion_oficial(
-                                        float(cli["lat"]), float(cli["lon"]),
-                                    )
-                                    if ctx_oficial:
-                                        contexto = (
-                                            contexto + "\n\n" + ctx_oficial
-                                        ).strip()
-                                except Exception:
-                                    pass
-                        except Exception as e:
-                            logging.warning(f"Clima no disponible: {e}")
+                        )
+                        if ctx_clinico:
+                            _partes_ctx.append(ctx_clinico)
+                    except Exception:
+                        pass
+                    # Si el cliente del lote tiene localidad, sumar clima + alertas
+                    lote_data = db.obtener_lote(lote_para_ia_id)
+                    if lote_data:
+                        cli = db.obtener_cliente(lote_data["cliente_id"])
+                        if cli and cli.get("localidad"):
+                            try:
+                                ctx_clima = resumen_clima_para_ia(
+                                    cli["localidad"],
+                                    categoria=lote_data.get("categoria", ""),
+                                )
+                                if ctx_clima:
+                                    _partes_ctx.append(ctx_clima)
+                                # Si el cliente está en La Pampa, sumar
+                                # estación oficial (datos reales gobierno)
+                                if cli.get("lat") and cli.get("lon"):
+                                    try:
+                                        ctx_oficial = resumen_estacion_oficial(
+                                            float(cli["lat"]), float(cli["lon"]),
+                                        )
+                                        if ctx_oficial:
+                                            _partes_ctx.append(ctx_oficial)
+                                    except Exception:
+                                        pass
+                            except Exception as e:
+                                logging.warning(f"Clima no disponible: {e}")
+                    ctx_pesado = "\n\n".join(
+                        p.strip() for p in _partes_ctx if p
+                    ).strip()
+                    st.session_state["_ctx_ia_cache"] = {
+                        "lote_id": lote_para_ia_id,
+                        "ts": datetime.now(),
+                        "texto": ctx_pesado,
+                    }
+                if ctx_pesado:
+                    contexto = (contexto + "\n\n" + ctx_pesado).strip()
             ctx_ingredientes = construir_contexto_ingredientes(st.session_state)
             with st.chat_message("assistant"):
                 placeholder = st.empty()
