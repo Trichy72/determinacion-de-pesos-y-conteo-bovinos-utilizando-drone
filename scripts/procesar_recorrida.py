@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Procesamiento batch de la recorrida con drone del 24/7/2026.  (v2: segmentación)
+Procesamiento batch de la recorrida con drone del 24/7/2026.  (v3: calibración)
 
 Recorre las fotos DJI de videos_drone/tarjeta_drone/, y para cada una:
   1. Lee altura relativa (XMP RelativeAltitude) y datos de cámara (EXIF)
@@ -33,11 +33,29 @@ Cambios v2 vs v1:
     las fotos con detecciones (antes solo <=30 m).
   - CSV: columnas nuevas `metodo` (mask|bbox) y `modelo`.
 
+Cambios v3 vs v2:
+  - FILTRO DE BORDE: detecciones cuya bbox toca el borde de la imagen
+    (margen 10 px) cuentan para el CONTEO pero NO para el peso — en la
+    corrida v2 los animales cortados por el encuadre (media máscara)
+    generaban outliers de 98-113 kg que bajaban el promedio. Columna
+    nueva `n_completos` en el CSV.
+  - MEDIA RECORTADA: el peso promedio del corral descarta el 10% inferior
+    y superior de los pesos individuales (animales completos del grupo).
+  - GRUPOS_REALES: mapeo hardcodeado rango de archivo -> corral con los
+    datos de verdad de campo (conteo y rango de peso real). El resumen
+    compara estimado vs real por corral.
+  - CALIBRACIÓN AUTOMÁTICA: con los corrales que tienen peso real se
+    calcula f = promedio ponderado de (peso_real_medio / peso_estimado)
+    y se propone a_calibrado = a x f. Se imprime tabla ANTES/DESPUÉS y
+    se guarda videos_drone/resultados/calibracion.json. config.yaml NO
+    se modifica (eso se decide después con el usuario).
+
 Salidas en videos_drone/resultados/:
   - resultados_fotos.csv   (una fila por foto)
   - anotadas/*.jpg         (todas las fotos con detecciones: contornos,
                             pesos y conteo)
-  - resumen.txt            (por cliente y grupo de fotos contiguas)
+  - resumen.txt            (por corral, con datos reales y calibración)
+  - calibracion.json       (factor de calibración propuesto)
 
 Uso en la Mac (desde la raíz del repo):
     source .venv/bin/activate
@@ -56,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import sys
 from dataclasses import dataclass, field
@@ -97,6 +116,31 @@ ROXDAN_DESDE, ROXDAN_HASTA = 63, 78
 # Umbrales
 ALTURA_PESO_CONFIABLE_M = 20.5 # fotos ≤20 m: las más confiables para peso
 GAP_GRUPO_SEG = 240            # >4 min entre fotos => nuevo grupo/corral
+MARGEN_BORDE_PX = 10           # bbox a <=10 px del borde => animal cortado
+FRAC_RECORTE = 0.10            # media recortada: descarta 10% inf y sup
+
+# ----------------------------------------------------------------------
+# Verdad de campo de la recorrida del 24/7/2026: rango de numeración de
+# archivo -> corral, con conteo real y rango de peso real (kg) declarado
+# por el cliente. peso_real=None => corral sin dato de peso.
+# ----------------------------------------------------------------------
+GRUPOS_REALES = [
+    {"corral": "Roxdan", "cliente": "Roxdan",
+     "desde": 63, "hasta": 78,
+     "conteo_real": None, "peso_real": None, "nota": "sin datos reales"},
+    {"corral": "Corral 1", "cliente": "La Esperanza Argentina",
+     "desde": 79, "hasta": 84,
+     "conteo_real": 185, "peso_real": None, "nota": "terneras, sin peso"},
+    {"corral": "Corral 3", "cliente": "La Esperanza Argentina",
+     "desde": 86, "hasta": 116,
+     "conteo_real": 78, "peso_real": (460, 500), "nota": "novillos"},
+    {"corral": "Corral 5", "cliente": "La Esperanza Argentina",
+     "desde": 117, "hasta": 129,
+     "conteo_real": 78, "peso_real": (440, 460), "nota": "novillos"},
+    {"corral": "Corral 6", "cliente": "La Esperanza Argentina",
+     "desde": 132, "hasta": 148,
+     "conteo_real": 96, "peso_real": (380, 440), "nota": "animales"},
+]
 
 # COCO ids de cuadrúpedos grandes con los que YOLO confunde bovinos en
 # vista cenital (mismo set que src/detector.py):
@@ -128,6 +172,7 @@ class FotoMeta:
     cliente: str = ""
     # resultados de detección (se completan después)
     n_animales: int = 0
+    n_completos: int = 0             # sin tocar el borde: los usados para peso
     pesos_kg: List[float] = field(default_factory=list)
     metodo: str = ""                 # "mask" | "bbox"
     n_descartadas: int = 0           # filtro anti-sombra (área fuera de rango)
@@ -382,6 +427,19 @@ def procesar_foto(meta, yolo, weight_model, categoria, solo_conteo,
         meta.metodo = dets[0]["metodo"]  # si no hay dets queda el default
         # que setea main() según el tipo de modelo (mask|bbox)
 
+    # --- filtro de borde (v3): animales cortados por el encuadre --------
+    # Cuentan para n_animales pero NO para el peso: en la corrida v2 los
+    # animales con media máscara daban outliers de 98-113 kg. Tampoco se
+    # les aplica el filtro anti-sombra de área (un animal cortado ES chico
+    # y lo queremos igual en el conteo).
+    for det in dets:
+        x1, y1, x2, y2 = (float(v) for v in det["bbox"][:4])
+        det["borde"] = (
+            x1 <= MARGEN_BORDE_PX or y1 <= MARGEN_BORDE_PX
+            or x2 >= w_orig - MARGEN_BORDE_PX
+            or y2 >= h_orig - MARGEN_BORDE_PX
+        )
+
     # --- área -> m², filtro anti-sombra y peso --------------------------
     m_per_px = (meta.gsd_cm_px / 100.0) if meta.gsd_cm_px else None
     validas = []
@@ -390,17 +448,19 @@ def procesar_foto(meta, yolo, weight_model, categoria, solo_conteo,
         if m_per_px:
             area_m2 = det["area_px"] * (m_per_px ** 2)
             det["area_m2"] = area_m2
-            if weight_model is not None and (
+            if not det["borde"] and weight_model is not None and (
                 area_m2 < weight_model.area_min_m2
                 or area_m2 > weight_model.area_max_m2
             ):
                 meta.n_descartadas += 1
                 continue  # descartada: sombra fusionada / doble / FP
-            if not solo_conteo and weight_model is not None:
+            if (not det["borde"] and not solo_conteo
+                    and weight_model is not None):
                 det["peso"] = weight_model.estimate(area_m2, categoria=categoria)
         validas.append(det)
 
     meta.n_animales = len(validas)
+    meta.n_completos = sum(1 for d in validas if not d.get("borde"))
     meta.pesos_kg = [d["peso"] for d in validas if d["peso"] is not None]
 
     if anotar and validas:
@@ -423,7 +483,10 @@ def _guardar_anotada(img, meta, dets, out_dir):
             x2, y2 = int(det["bbox"][2]), int(det["bbox"][3])
             cv2.rectangle(img, (x1, y1), (x2, y2), verde, 3)
         peso = det.get("peso")
-        etiqueta = f"{peso:.0f} kg" if peso else f"{det['conf']:.2f}"
+        if det.get("borde"):
+            etiqueta = "borde"
+        else:
+            etiqueta = f"{peso:.0f} kg" if peso else f"{det['conf']:.2f}"
         cv2.putText(img, etiqueta, (x1, max(30, y1 - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 5)
         cv2.putText(img, etiqueta, (x1, max(30, y1 - 8)),
@@ -454,13 +517,28 @@ def _stats(pesos: List[float]):
     return f"{prom:.0f}", f"{min(pesos):.0f}", f"{max(pesos):.0f}"
 
 
+def media_recortada(pesos: List[float], frac: float = FRAC_RECORTE) -> Optional[float]:
+    """Media recortada: descarta la fracción `frac` inferior Y superior.
+
+    Con pocas muestras (si el recorte dejaría la lista vacía) devuelve la
+    media simple.
+    """
+    if not pesos:
+        return None
+    s = sorted(pesos)
+    k = int(len(s) * frac)
+    if len(s) - 2 * k >= 1:
+        s = s[k:len(s) - k]
+    return sum(s) / len(s)
+
+
 def escribir_csv(fotos: List[FotoMeta], path: Path, modelo: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow([
             "archivo", "hora", "altura_m", "gsd_cm_px", "n_animales",
-            "peso_prom_kg", "peso_min", "peso_max", "cliente",
+            "n_completos", "peso_prom_kg", "peso_min", "peso_max", "cliente",
             "metodo", "modelo",
         ])
         for f in fotos:
@@ -471,6 +549,7 @@ def escribir_csv(fotos: List[FotoMeta], path: Path, modelo: str) -> None:
                 f"{f.altura_m:.1f}" if f.altura_m is not None else "",
                 f"{f.gsd_cm_px:.3f}" if f.gsd_cm_px else "",
                 f.n_animales,
+                f.n_completos,
                 prom, pmin, pmax,
                 f.cliente,
                 f.metodo,
@@ -478,58 +557,186 @@ def escribir_csv(fotos: List[FotoMeta], path: Path, modelo: str) -> None:
             ])
 
 
-def escribir_resumen(fotos: List[FotoMeta], path: Path, categoria: str,
-                     solo_conteo: bool) -> None:
-    grupos = agrupar_fotos(fotos)
+# ----------------------------------------------------------------------
+# Corrales reales: estadísticas por corral y calibración automática
+# ----------------------------------------------------------------------
+
+def stats_corrales(fotos: List[FotoMeta]) -> List[dict]:
+    """Agrupa las fotos según GRUPOS_REALES y calcula por corral:
+    conteo máximo por foto, n animales pesados (completos), peso promedio
+    estimado (media recortada 10%) y desvío % vs punto medio del rango real.
+
+    Para el peso usa primero solo fotos <= ALTURA_PESO_CONFIABLE_M; si el
+    corral no tiene ninguna (ej. Corral 6, fotografiado a 50 m), cae a los
+    pesos de todas las alturas y lo marca con `alturas_altas`.
+    """
+    out = []
+    for g in GRUPOS_REALES:
+        fg = [f for f in fotos if g["desde"] <= f.numero <= g["hasta"]]
+        if not fg:
+            continue
+        c = dict(g)
+        c["fotos"] = fg
+        mejor = max(fg, key=lambda f: f.n_animales)
+        c["conteo_max"] = mejor.n_animales
+        c["foto_max"] = mejor.nombre
+
+        pesos = [p for f in fg
+                 if f.altura_m is not None
+                 and f.altura_m <= ALTURA_PESO_CONFIABLE_M
+                 for p in f.pesos_kg]
+        c["alturas_altas"] = False
+        if not pesos:
+            pesos = [p for f in fg for p in f.pesos_kg]
+            c["alturas_altas"] = bool(pesos)
+        c["n_pesados"] = len(pesos)
+        c["peso_est"] = media_recortada(pesos)
+
+        real = g["peso_real"]
+        c["real_medio"] = (real[0] + real[1]) / 2.0 if real else None
+        c["desvio_pct"] = (
+            (c["peso_est"] - c["real_medio"]) / c["real_medio"] * 100.0
+            if c["peso_est"] is not None and c["real_medio"] else None
+        )
+        out.append(c)
+    return out
+
+
+def calibrar(corrales: List[dict], a_original: float) -> Optional[dict]:
+    """Factor global f = promedio ponderado (por n animales pesados) de
+    peso_real_medio / peso_estimado, sobre los corrales con peso real.
+    Propone a_calibrado = a_original x f. NO toca config.yaml."""
+    usados = [c for c in corrales
+              if c["real_medio"] and c["peso_est"] and c["n_pesados"] > 0]
+    if not usados:
+        return None
+    den = sum(c["n_pesados"] for c in usados)
+    f = sum(c["n_pesados"] * (c["real_medio"] / c["peso_est"])
+            for c in usados) / den
+    return {
+        "factor": round(f, 4),
+        "a_original": a_original,
+        "a_calibrado": round(a_original * f, 2),
+        "fecha": datetime.now().isoformat(timespec="seconds"),
+        "corrales_usados": [c["corral"] for c in usados],
+    }
+
+
+def tabla_calibracion(corrales: List[dict], calib: dict) -> List[str]:
+    """Tabla ANTES/DESPUÉS: estimado original y corregido por f vs real."""
+    f = calib["factor"]
     lineas = [
-        "RESUMEN RECORRIDA DRONE - conteo y peso estimado",
+        f"Factor global f = {f:.4f} (ponderado por n animales pesados; "
+        f"corrales: {', '.join(calib['corrales_usados'])})",
+        f"Coeficiente a: {calib['a_original']:.1f} -> a_calibrado = "
+        f"{calib['a_calibrado']:.1f}",
+        "",
+        f"{'Corral':<10} {'Est. ANTES':>10} {'Est. x f':>10} {'Real medio':>10} "
+        f"{'Err ANTES':>10} {'Err DESPUES':>11}",
+    ]
+    for c in corrales:
+        if not (c["real_medio"] and c["peso_est"]):
+            continue
+        antes = c["peso_est"]
+        despues = antes * f
+        err_a = (antes - c["real_medio"]) / c["real_medio"] * 100.0
+        err_d = (despues - c["real_medio"]) / c["real_medio"] * 100.0
+        lineas.append(
+            f"{c['corral']:<10} {antes:>7.0f} kg {despues:>7.0f} kg "
+            f"{c['real_medio']:>7.0f} kg {err_a:>+9.1f}% {err_d:>+10.1f}%"
+        )
+    return lineas
+
+
+def escribir_resumen(fotos: List[FotoMeta], path: Path, categoria: str,
+                     solo_conteo: bool, corrales: List[dict],
+                     calib: Optional[dict]) -> None:
+    lineas = [
+        "RESUMEN RECORRIDA DRONE v3 - conteo y peso estimado POR CORRAL",
         f"Generado: {datetime.now():%Y-%m-%d %H:%M}   "
         f"Categoria peso: {categoria}   Fotos procesadas: {len(fotos)}",
-        "Peso por area de MASCARA de segmentacion (excluye la sombra).",
-        "Conteo del corral = MAXIMO de animales detectados en una foto del",
-        "grupo (la foto que mejor cubre el corral). Peso promedio = solo de",
-        f"fotos a <= {ALTURA_PESO_CONFIABLE_M:.0f} m (escala mas confiable).",
+        "Peso por area de MASCARA de segmentacion (excluye la sombra),",
+        "SOLO animales completos (bbox que no toca el borde de la imagen,",
+        f"margen {MARGEN_BORDE_PX} px). Peso promedio del corral = MEDIA "
+        f"RECORTADA {FRAC_RECORTE:.0%}",
+        f"de los pesos individuales, priorizando fotos <= "
+        f"{ALTURA_PESO_CONFIABLE_M:.0f} m.",
+        "Conteo del corral = MAXIMO de animales detectados en una foto.",
         "=" * 70,
     ]
     cliente_actual = None
-    for i, g in enumerate(grupos, 1):
-        if g[0].cliente != cliente_actual:
-            cliente_actual = g[0].cliente
+    for c in corrales:
+        if c["cliente"] != cliente_actual:
+            cliente_actual = c["cliente"]
             lineas += ["", f"CLIENTE: {cliente_actual}", "-" * 70]
 
+        g = c["fotos"]
         horas = [f.hora for f in g if f.hora]
         rango_h = (f"{min(horas):%H:%M}-{max(horas):%H:%M}" if horas else "s/hora")
         alturas = sorted({round(f.altura_m) for f in g if f.altura_m is not None})
-        mejor = max(g, key=lambda f: f.n_animales)
 
         lineas.append(
-            f"Grupo {i}: {g[0].nombre} a {g[-1].nombre} "
-            f"({len(g)} fotos, {rango_h}, alturas {alturas} m)"
+            f"{c['corral'].upper()} ({c['nota']}): {g[0].nombre} a "
+            f"{g[-1].nombre} ({len(g)} fotos, {rango_h}, alturas {alturas} m)"
         )
+        conteo_real = (f"{c['conteo_real']}" if c["conteo_real"] is not None
+                       else "s/dato")
         lineas.append(
-            f"  Conteo maximo: {mejor.n_animales} animales (en {mejor.nombre})"
+            f"  Conteo: maximo por foto {c['conteo_max']} "
+            f"(en {c['foto_max']})  |  real: {conteo_real}"
         )
         if not solo_conteo:
-            pesos_conf = [
-                p for f in g
-                if f.altura_m is not None and f.altura_m <= ALTURA_PESO_CONFIABLE_M
-                for p in f.pesos_kg
-            ]
-            if pesos_conf:
-                prom = sum(pesos_conf) / len(pesos_conf)
+            if c["peso_est"] is not None:
+                aviso = (" [OJO: solo fotos altas >20 m]"
+                         if c["alturas_altas"] else "")
                 lineas.append(
-                    f"  Peso promedio (fotos <=20 m, {len(pesos_conf)} animales):"
-                    f" {prom:.0f} kg  [{min(pesos_conf):.0f}-{max(pesos_conf):.0f}]"
+                    f"  Peso estimado (media recortada, {c['n_pesados']} "
+                    f"animales completos): {c['peso_est']:.0f} kg{aviso}"
                 )
             else:
-                lineas.append("  Peso promedio: sin fotos <=20 m con pesos validos")
+                lineas.append("  Peso estimado: sin animales completos pesados")
+            if c["peso_real"]:
+                r0, r1 = c["peso_real"]
+                lineas.append(
+                    f"  Peso real: {r0}-{r1} kg (punto medio "
+                    f"{c['real_medio']:.0f} kg)"
+                )
+                if c["desvio_pct"] is not None:
+                    lineas.append(
+                        f"  Desvio estimado vs real: {c['desvio_pct']:+.1f}%"
+                    )
+            else:
+                lineas.append("  Peso real: sin dato")
         conteos = ", ".join(f"{f.nombre}={f.n_animales}" for f in g)
         lineas.append(f"  Detalle conteos: {conteos}")
         lineas.append("")
 
+    numeros_mapeados = {f.numero for c in corrales for f in c["fotos"]}
+    sueltas = [f for f in fotos if f.numero not in numeros_mapeados]
+    if sueltas:
+        lineas += ["FOTOS FUERA DEL MAPEO DE CORRALES (no usadas arriba):",
+                   "  " + ", ".join(f.nombre for f in sueltas), ""]
+
+    if calib:
+        lineas += ["=" * 70,
+                   "CALIBRACION AUTOMATICA (corrales con peso real)",
+                   "-" * 70]
+        lineas += tabla_calibracion(corrales, calib)
+        lineas += [
+            "",
+            "ERROR FINAL POR CORRAL TRAS CALIBRAR (columna 'Err DESPUES').",
+            "Factor guardado en videos_drone/resultados/calibracion.json.",
+            "config.yaml NO fue modificado: aplicar a_calibrado se decide",
+            "con el usuario.",
+        ]
+    elif not solo_conteo:
+        lineas += ["=" * 70,
+                   "CALIBRACION: no se pudo calcular (ningun corral con peso "
+                   "real y estimado a la vez)."]
+
     errores = [f for f in fotos if f.error]
     if errores:
-        lineas += ["FOTOS CON ERROR:"] + [
+        lineas += ["", "FOTOS CON ERROR:"] + [
             f"  {f.path.name}: {f.error}" for f in errores
         ]
 
@@ -608,19 +815,40 @@ def main() -> None:
 
     csv_path = DIR_RESULTADOS / "resultados_fotos.csv"
     resumen_path = DIR_RESULTADOS / "resumen.txt"
+    calib_path = DIR_RESULTADOS / "calibracion.json"
     escribir_csv(fotos, csv_path, args.modelo)
-    escribir_resumen(fotos, resumen_path, args.categoria, args.solo_conteo)
+
+    corrales = stats_corrales(fotos)
+    calib = None
+    if not args.solo_conteo:
+        calib = calibrar(corrales, weight_model.coef_a)
+        if calib:
+            calib_path.parent.mkdir(parents=True, exist_ok=True)
+            calib_path.write_text(
+                json.dumps(calib, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+    escribir_resumen(fotos, resumen_path, args.categoria, args.solo_conteo,
+                     corrales, calib)
 
     print()
     print("=" * 60)
+    if calib:
+        print("CALIBRACION AUTOMATICA (ANTES/DESPUES vs peso real):")
+        for linea in tabla_calibracion(corrales, calib):
+            print("  " + linea)
+        print(f"  Guardada en: {calib_path} (config.yaml NO modificado)")
+        print("=" * 60)
     print("LISTO. Resultados en:")
     print(f"  CSV por foto:    {csv_path}")
-    print(f"  Resumen grupos:  {resumen_path}")
+    print(f"  Resumen corrales: {resumen_path}")
+    if calib:
+        print(f"  Calibracion:     {calib_path}")
     if not args.no_anotar:
         print(f"  Fotos anotadas:  {DIR_ANOTADAS}/ (contorno de mascara = "
-              "silueta SIN sombra)")
-    print("Contrastar el 'Conteo maximo' y 'Peso promedio' de resumen.txt")
-    print("con los datos reales de cada corral.")
+              "silueta SIN sombra; 'borde' = animal cortado, no pesado)")
+    print("Ver en resumen.txt el desvio % por corral vs datos reales y el")
+    print("error final tras aplicar el factor de calibracion.")
 
 
 if __name__ == "__main__":
