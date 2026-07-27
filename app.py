@@ -1662,7 +1662,10 @@ except Exception:
     _hdr_stats = ""
 
 _logo_html_hdr = ""
-_logo_path_hdr = Path("assets/logo.png")
+# Logo blanco (knockout) para el header oscuro; fallback al logo color.
+_logo_path_hdr = Path("assets/logo_blanco.png")
+if not _logo_path_hdr.exists():
+    _logo_path_hdr = Path("assets/logo.png")
 if _logo_path_hdr.exists():
     import base64 as _b64_hdr
     _logo_html_hdr = (
