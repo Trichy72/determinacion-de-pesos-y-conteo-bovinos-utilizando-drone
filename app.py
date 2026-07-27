@@ -1564,15 +1564,17 @@ st.markdown("""
     }
     /* Barra de pestañas principal — píldoras estilo HMS */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
+        gap: 10px;
         border-bottom: none;
-        padding: 4px;
-        background: transparent;
+        padding: 8px;
+        background: rgba(139, 197, 63, 0.07);
+        border-radius: 999px;
     }
     .stTabs [data-baseweb="tab"] {
         border-radius: 999px;
-        padding: 7px 18px;
-        font-size: 0.88rem;
+        padding: 12px 24px;
+        height: auto;
+        font-size: 1.02rem;
         font-weight: 600;
         letter-spacing: 0.02em;
         color: rgba(128, 132, 138, 0.95);
@@ -1581,11 +1583,17 @@ st.markdown("""
         transition: background 0.15s ease, color 0.15s ease;
     }
     .stTabs [data-baseweb="tab"]:hover {
-        background: rgba(139, 197, 63, 0.12);
+        background: rgba(139, 197, 63, 0.15);
     }
     .stTabs [data-baseweb="tab"][aria-selected="true"] {
         background: #8BC53F !important;
         color: #0B2012 !important;
+        box-shadow: 0 2px 8px rgba(139, 197, 63, 0.35);
+    }
+    /* Íconos material de las tabs un poco más grandes */
+    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p span[data-testid="stIconMaterial"] {
+        font-size: 1.25rem;
+        vertical-align: -3px;
     }
     /* Ocultar la barrita indicadora nativa */
     .stTabs [data-baseweb="tab-highlight"] { display: none; }
