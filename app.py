@@ -1562,49 +1562,63 @@ st.markdown("""
         color: #1B3E27;
         border: 2px solid #1B3E27;
     }
-    /* Barra de pestañas principal — píldoras estilo HMS */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-        border-bottom: none;
-        padding: 8px;
-        background: rgba(139, 197, 63, 0.07);
-        border-radius: 999px;
+    /* Barra de pestañas principal — píldoras estilo HMS.
+       Selectores dobles (.stTabs legacy + data-testid moderno) porque
+       Streamlit >=1.4x ya no garantiza la clase .stTabs. */
+    .stTabs [data-baseweb="tab-list"],
+    div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+        gap: 10px !important;
+        border-bottom: none !important;
+        padding: 8px !important;
+        background: rgba(139, 197, 63, 0.07) !important;
+        border-radius: 999px !important;
     }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 999px;
-        padding: 12px 24px;
-        height: auto;
-        font-size: 1.02rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        color: rgba(128, 132, 138, 0.95);
-        border: none;
+    .stTabs [data-baseweb="tab"],
+    div[data-testid="stTabs"] button[data-baseweb="tab"] {
+        border-radius: 999px !important;
+        padding: 12px 24px !important;
+        height: auto !important;
+        border: none !important;
         background: transparent;
         transition: background 0.15s ease, color 0.15s ease;
     }
-    .stTabs [data-baseweb="tab"]:hover {
-        background: rgba(139, 197, 63, 0.15);
+    .stTabs [data-baseweb="tab"] p,
+    div[data-testid="stTabs"] button[data-baseweb="tab"] p {
+        font-size: 1.05rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.02em;
+        margin: 0 !important;
+        color: inherit !important;
     }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+    div[data-testid="stTabs"] button[data-baseweb="tab"] {
+        color: rgba(128, 132, 138, 0.95) !important;
+    }
+    .stTabs [data-baseweb="tab"]:hover,
+    div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
+        background: rgba(139, 197, 63, 0.15) !important;
+    }
+    .stTabs [data-baseweb="tab"][aria-selected="true"],
+    div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
         background: #8BC53F !important;
         color: #0B2012 !important;
         box-shadow: 0 2px 8px rgba(139, 197, 63, 0.35);
     }
     /* Íconos material de las tabs un poco más grandes */
-    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p span[data-testid="stIconMaterial"] {
-        font-size: 1.25rem;
+    div[data-testid="stTabs"] button[data-baseweb="tab"] span[data-testid="stIconMaterial"],
+    .stTabs [data-baseweb="tab"] span[data-testid="stIconMaterial"] {
+        font-size: 1.3rem !important;
         vertical-align: -3px;
+        color: inherit !important;
     }
-    /* Ocultar la barrita indicadora nativa */
-    .stTabs [data-baseweb="tab-highlight"] { display: none; }
-    .stTabs [data-baseweb="tab-border"] { display: none; }
-    /* El label (texto + ícono material) hereda el color de la píldora */
-    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p {
-        margin: 0;
-        color: inherit;
-    }
-    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p span {
-        color: inherit;
+    /* Ocultar la barrita indicadora nativa (roja por default) */
+    .stTabs [data-baseweb="tab-highlight"],
+    div[data-testid="stTabs"] [data-baseweb="tab-highlight"] { display: none !important; }
+    .stTabs [data-baseweb="tab-border"],
+    div[data-testid="stTabs"] [data-baseweb="tab-border"] { display: none !important; }
+    /* El label hereda el color de la píldora */
+    div[data-testid="stTabs"] button[data-baseweb="tab"] [data-testid="stMarkdownContainer"],
+    div[data-testid="stTabs"] button[data-baseweb="tab"] [data-testid="stMarkdownContainer"] span {
+        color: inherit !important;
     }
     /* Métricas */
     [data-testid="stMetricValue"] { color: #1B3E27; }
