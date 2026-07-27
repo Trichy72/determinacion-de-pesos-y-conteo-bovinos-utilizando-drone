@@ -1598,11 +1598,14 @@ st.markdown("""
         background: #f2f2f0 !important;
         background-color: #f2f2f0 !important;
         color: #1a1a18 !important;
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+        box-shadow: inset 0 -3px 0 0 #8BC53F, 0 1px 4px rgba(0, 0, 0, 0.35);
     }
-    div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] p,
-    div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] span {
+    div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] p {
         color: #1a1a18 !important;
+    }
+    /* Acento HMS: el ícono de la pestaña activa en verde marca */
+    div[data-testid="stTabs"] div[data-testid="stTab"][aria-selected="true"] span[data-testid="stIconMaterial"] {
+        color: #3B6D11 !important;
     }
     /* Íconos material de las tabs un poco más grandes */
     div[data-testid="stTabs"] [data-testid="stTab"] span[data-testid="stIconMaterial"] {
