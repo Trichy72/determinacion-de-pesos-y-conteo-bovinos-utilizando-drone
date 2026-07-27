@@ -82,3 +82,6 @@ Thumbs.db
 # ─── Backups ───
 # La red de seguridad vive local, NO en git.
 backups/
+
+# ─── Fotos y videos de la tarjeta del drone (pesados + datos de clientes) ───
+videos_drone/
