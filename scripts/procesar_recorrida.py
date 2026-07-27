@@ -1,32 +1,54 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Procesamiento batch de la recorrida con drone del 24/7/2026.
+Procesamiento batch de la recorrida con drone del 24/7/2026.  (v2: segmentación)
 
 Recorre las fotos DJI de videos_drone/tarjeta_drone/, y para cada una:
   1. Lee altura relativa (XMP RelativeAltitude) y datos de cámara (EXIF)
      para calcular la escala GSD (cm/píxel) sin necesidad del cuadrado
      de referencia en el piso.
-  2. Detecta bovinos con YOLO (reusa src/detector.py: clases COCO de
-     cuadrúpedos grandes, conf bajo, tiles SAHI-style para fotos altas).
-  3. Cuenta animales y estima peso por animal reusando el estimador del
-     pipeline (src/weight_estimator.py: área silueta m² -> kg con modelo
-     alométrico, factor bbox->silueta 0.69, factores por categoría).
+  2. Detecta bovinos con YOLO de SEGMENTACIÓN (default yolov8l-seg.pt,
+     clases COCO de cuadrúpedos grandes, conf baja 0.10, imgsz 3840 para
+     usar casi toda la resolución 4000x2250 — clave para fotos de 50/100 m
+     donde un animal mide ~50 px).
+  3. Estima peso por animal con el ÁREA DE LA MÁSCARA de segmentación
+     (píxeles de silueta x GSD²), que EXCLUYE LA SOMBRA del animal — la
+     primera corrida (sol bajo de invierno) inflaba pesos porque el bbox
+     abarcaba animal + sombra. Reusa src/weight_estimator.py (modelo
+     alométrico a=220, b=1.20, factor por categoría). Si el modelo elegido
+     NO es de segmentación (--modelo yolov8m.pt), cae al método anterior:
+     área bbox x 0.69.
+
+Cambios v2 vs v1:
+  - Peso por máscara (sin sombra) en vez de bbox x 0.69.
+  - imgsz default 3840 (antes 1920) y conf default 0.10 (antes 0.15):
+    mejora el recall de animales negros y de fotos altas. Se eliminó el
+    modo tiles: a resolución casi nativa el modelo -seg grande encuentra
+    los animales chicos directo en full-frame.
+  - Filtro anti-sombra: detecciones cuya área de silueta cae fuera del
+    rango válido [area_min_m2, area_max_m2] del WeightModel se DESCARTAN
+    (típico: máscara que fusionó animal+sombra o dos animales pegados).
+  - Anotadas: se dibuja el CONTORNO de la máscara (no solo bbox) para
+    verificar visualmente que la sombra quedó excluida, y se anotan TODAS
+    las fotos con detecciones (antes solo <=30 m).
+  - CSV: columnas nuevas `metodo` (mask|bbox) y `modelo`.
 
 Salidas en videos_drone/resultados/:
   - resultados_fotos.csv   (una fila por foto)
-  - anotadas/*.jpg         (fotos ≤30 m anotadas con cajas, pesos y conteo)
+  - anotadas/*.jpg         (todas las fotos con detecciones: contornos,
+                            pesos y conteo)
   - resumen.txt            (por cliente y grupo de fotos contiguas)
 
 Uso en la Mac (desde la raíz del repo):
     source .venv/bin/activate
     python scripts/procesar_recorrida.py
-    python scripts/procesar_recorrida.py --solo-conteo --conf 0.2
+    python scripts/procesar_recorrida.py --solo-conteo --conf 0.15
     python scripts/procesar_recorrida.py --desde DJI_0079 --hasta DJI_0148 \
         --categoria novillo
+    python scripts/procesar_recorrida.py --modelo yolov8m.pt --imgsz 1920  # v1
 
 NOTA: los imports pesados (ultralytics, cv2, numpy, yaml) se hacen recién
-dentro de main()/run_deteccion() para que el parsing EXIF/GSD se pueda
+dentro de main()/procesar_foto() para que el parsing EXIF/GSD se pueda
 testear sin GPU ni ultralytics instalado.
 """
 
@@ -72,10 +94,18 @@ SENSOR_WIDTH_MM = {
 # Rango de fotos del cliente Roxdan (el resto es La Esperanza Argentina)
 ROXDAN_DESDE, ROXDAN_HASTA = 63, 78
 
-# Umbrales de detección/agrupación
-ALTURA_MODO_TILES_M = 35.0     # por encima de esto, inferencia por tiles
+# Umbrales
 ALTURA_PESO_CONFIABLE_M = 20.5 # fotos ≤20 m: las más confiables para peso
 GAP_GRUPO_SEG = 240            # >4 min entre fotos => nuevo grupo/corral
+
+# COCO ids de cuadrúpedos grandes con los que YOLO confunde bovinos en
+# vista cenital (mismo set que src/detector.py):
+# 17 dog, 18 horse, 19 cow, 20 sheep, 21 elephant, 22 bear, 23 zebra
+CLASES_COCO_BOVINO = [17, 18, 19, 20, 21, 22, 23]
+
+# Factor bbox->silueta calibrado empíricamente (solo para modelos SIN
+# segmentación; con máscara la silueta es directa y no hace falta).
+FACTOR_BBOX_SILUETA = 0.69
 
 
 # ----------------------------------------------------------------------
@@ -99,6 +129,8 @@ class FotoMeta:
     # resultados de detección (se completan después)
     n_animales: int = 0
     pesos_kg: List[float] = field(default_factory=list)
+    metodo: str = ""                 # "mask" | "bbox"
+    n_descartadas: int = 0           # filtro anti-sombra (área fuera de rango)
     error: str = ""
 
 
@@ -264,23 +296,46 @@ def cargar_weight_model():
     return WeightModel()
 
 
-def crear_detector(modelo: str, conf: float, imgsz: int):
-    """Reusa src/detector.py (clases COCO aéreas, NMS iou 0.5, tiles SAHI)."""
-    sys.path.insert(0, str(REPO_ROOT))
-    from src.detector import CattleDetector
+def crear_yolo(modelo: str):
+    """Carga el modelo YOLO (de la raíz del repo si existe ahí)."""
+    from ultralytics import YOLO
 
     model_path = str(REPO_ROOT / modelo) if (REPO_ROOT / modelo).exists() else modelo
-    return CattleDetector(
-        model_path=model_path,
-        conf=conf,
-        iou=0.5,
-        imgsz=imgsz,
-    )
+    return YOLO(model_path)
 
 
-def procesar_foto(meta, detector, weight_model, categoria, solo_conteo,
-                  anotar, out_anotadas):
-    """Detecta, cuenta, estima pesos y (opcional) guarda la foto anotada."""
+def procesar_foto(meta, yolo, weight_model, categoria, solo_conteo,
+                  anotar, out_anotadas, conf, imgsz):
+    """Detecta, filtra, cuenta, estima pesos y (opcional) anota la foto.
+
+    Peso por MÁSCARA de segmentación (excluye la sombra):
+
+      * `res.masks.data` de ultralytics es un tensor N x H_inf x W_inf en la
+        RESOLUCIÓN DE INFERENCIA (imagen reescalada + letterbox a múltiplo
+        de 32; ej. 4000x2250 con imgsz=3840 -> máscaras de 2176x3840), NO en
+        la resolución original. Por eso el área en píxeles hay que escalarla
+        al tamaño original:
+
+            r = min(W_mask / W_orig, H_mask / H_orig)   # escala letterbox
+            area_px_orig = mask.sum() * (1 / r)**2
+
+        Con fotos apaisadas el letterbox rellena arriba/abajo, así que
+        r = W_mask / W_orig y la fórmula equivale a
+        area_px_orig = mask.sum() * (W_orig / W_mask)**2.
+        (Se suma sobre el tensor sin resize a 4000x2250: mismo resultado,
+        mucha menos memoria.)
+
+      * Los contornos para anotar salen de `res.masks.xy`, que ultralytics
+        YA devuelve en coordenadas de la imagen original (usa scale_coords
+        internamente), igual que `res.boxes.xyxy`.
+
+    Fallback sin segmentación (modelo detección pura): área bbox x 0.69.
+
+    Filtro anti-sombra: si el área de silueta (máscara o bbox corregido)
+    cae fuera de [area_min_m2, area_max_m2] del WeightModel, la detección
+    se DESCARTA por completo (conteo y anotado): casi siempre es una
+    máscara que fusionó animal+sombra o dos animales, o un falso positivo.
+    """
     import cv2
 
     img = cv2.imread(str(meta.path))
@@ -288,39 +343,87 @@ def procesar_foto(meta, detector, weight_model, categoria, solo_conteo,
         meta.error = "No pude abrir la imagen con OpenCV"
         return
 
-    # Fotos altas (50/100 m): tiles SAHI-style del detector existente para
-    # no perder animales chicos; fotos bajas: full-frame.
-    alta = meta.altura_m is not None and meta.altura_m > ALTURA_MODO_TILES_M
-    detector.modo_tropa_densa = alta
-    detector.tile_grid = 3 if alta else 2
+    h_orig, w_orig = img.shape[:2]
+    res = yolo.predict(
+        img,
+        conf=conf,
+        iou=0.5,
+        imgsz=imgsz,
+        classes=CLASES_COCO_BOVINO,
+        verbose=False,
+    )[0]
 
-    detecciones = detector.detect(img)
-    meta.n_animales = len(detecciones)
+    # --- parsear detecciones: bbox + (opcional) máscara -----------------
+    dets = []  # dicts: bbox, conf, area_px (silueta en px ORIGINALES), poly
+    if res.boxes is not None and len(res.boxes) > 0:
+        boxes = res.boxes.xyxy.cpu().numpy()   # ya en coords originales
+        confs = res.boxes.conf.cpu().numpy()
+        masks = getattr(res, "masks", None)
+        polys = masks.xy if masks is not None else None  # coords originales
+        if masks is not None:
+            h_mask, w_mask = masks.data.shape[-2], masks.data.shape[-1]
+            # Escala letterbox original->inferencia (ver docstring)
+            r = min(w_mask / float(w_orig), h_mask / float(h_orig))
+            factor_area = (1.0 / r) ** 2
+        for i, (box, cf) in enumerate(zip(boxes, confs)):
+            if masks is not None and i < len(masks.data):
+                area_px = float(masks.data[i].sum()) * factor_area
+                metodo = "mask"
+                poly = polys[i] if polys is not None and i < len(polys) else None
+            else:
+                area_px = float((box[2] - box[0]) * (box[3] - box[1])) \
+                    * FACTOR_BBOX_SILUETA
+                metodo = "bbox"
+                poly = None
+            dets.append({"bbox": box, "conf": float(cf), "area_px": area_px,
+                         "poly": poly, "metodo": metodo})
 
-    pesos = []
-    if not solo_conteo and meta.gsd_cm_px:
-        m_per_px = meta.gsd_cm_px / 100.0
-        for det in detecciones:
-            # det.area_px ya viene con máscara real o bbox*0.69 (silueta)
-            area_m2 = det.area_px * (m_per_px ** 2)
-            peso = weight_model.estimate(area_m2, categoria=categoria)
-            pesos.append(peso)  # None si el área cae fuera de rango
-    meta.pesos_kg = [p for p in pesos if p is not None]
+    if dets:
+        meta.metodo = dets[0]["metodo"]  # si no hay dets queda el default
+        # que setea main() según el tipo de modelo (mask|bbox)
 
-    if anotar:
-        _guardar_anotada(img, meta, detecciones, pesos, out_anotadas)
+    # --- área -> m², filtro anti-sombra y peso --------------------------
+    m_per_px = (meta.gsd_cm_px / 100.0) if meta.gsd_cm_px else None
+    validas = []
+    for det in dets:
+        det["peso"] = None
+        if m_per_px:
+            area_m2 = det["area_px"] * (m_per_px ** 2)
+            det["area_m2"] = area_m2
+            if weight_model is not None and (
+                area_m2 < weight_model.area_min_m2
+                or area_m2 > weight_model.area_max_m2
+            ):
+                meta.n_descartadas += 1
+                continue  # descartada: sombra fusionada / doble / FP
+            if not solo_conteo and weight_model is not None:
+                det["peso"] = weight_model.estimate(area_m2, categoria=categoria)
+        validas.append(det)
+
+    meta.n_animales = len(validas)
+    meta.pesos_kg = [d["peso"] for d in validas if d["peso"] is not None]
+
+    if anotar and validas:
+        _guardar_anotada(img, meta, validas, out_anotadas)
 
 
-def _guardar_anotada(img, meta, detecciones, pesos, out_dir):
+def _guardar_anotada(img, meta, dets, out_dir):
+    """Anota contorno de máscara (verde) o bbox (si no hay máscara) + peso."""
     import cv2
+    import numpy as np
 
     verde = (0, 255, 0)
-    for i, det in enumerate(detecciones):
-        x1, y1 = int(det.x1), int(det.y1)
-        x2, y2 = int(det.x2), int(det.y2)
-        cv2.rectangle(img, (x1, y1), (x2, y2), verde, 3)
-        peso = pesos[i] if i < len(pesos) else None
-        etiqueta = f"{peso:.0f} kg" if peso else f"{det.confidence:.2f}"
+    for det in dets:
+        x1, y1 = int(det["bbox"][0]), int(det["bbox"][1])
+        poly = det.get("poly")
+        if poly is not None and len(poly) >= 3:
+            pts = np.asarray(poly, dtype=np.int32).reshape(-1, 1, 2)
+            cv2.polylines(img, [pts], True, verde, 3)
+        else:
+            x2, y2 = int(det["bbox"][2]), int(det["bbox"][3])
+            cv2.rectangle(img, (x1, y1), (x2, y2), verde, 3)
+        peso = det.get("peso")
+        etiqueta = f"{peso:.0f} kg" if peso else f"{det['conf']:.2f}"
         cv2.putText(img, etiqueta, (x1, max(30, y1 - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 5)
         cv2.putText(img, etiqueta, (x1, max(30, y1 - 8)),
@@ -329,6 +432,8 @@ def _guardar_anotada(img, meta, detecciones, pesos, out_dir):
     texto = f"{meta.nombre}  |  {meta.n_animales} animales"
     if meta.altura_m is not None:
         texto += f"  |  {meta.altura_m:.0f} m"
+    if meta.n_descartadas:
+        texto += f"  |  {meta.n_descartadas} descartadas"
     cv2.rectangle(img, (10, 10), (60 + 32 * len(texto), 90), (0, 0, 0), -1)
     cv2.putText(img, texto, (30, 68), cv2.FONT_HERSHEY_SIMPLEX,
                 1.8, (0, 255, 255), 4)
@@ -349,13 +454,14 @@ def _stats(pesos: List[float]):
     return f"{prom:.0f}", f"{min(pesos):.0f}", f"{max(pesos):.0f}"
 
 
-def escribir_csv(fotos: List[FotoMeta], path: Path) -> None:
+def escribir_csv(fotos: List[FotoMeta], path: Path, modelo: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow([
             "archivo", "hora", "altura_m", "gsd_cm_px", "n_animales",
             "peso_prom_kg", "peso_min", "peso_max", "cliente",
+            "metodo", "modelo",
         ])
         for f in fotos:
             prom, pmin, pmax = _stats(f.pesos_kg)
@@ -367,6 +473,8 @@ def escribir_csv(fotos: List[FotoMeta], path: Path) -> None:
                 f.n_animales,
                 prom, pmin, pmax,
                 f.cliente,
+                f.metodo,
+                modelo,
             ])
 
 
@@ -377,6 +485,7 @@ def escribir_resumen(fotos: List[FotoMeta], path: Path, categoria: str,
         "RESUMEN RECORRIDA DRONE - conteo y peso estimado",
         f"Generado: {datetime.now():%Y-%m-%d %H:%M}   "
         f"Categoria peso: {categoria}   Fotos procesadas: {len(fotos)}",
+        "Peso por area de MASCARA de segmentacion (excluye la sombra).",
         "Conteo del corral = MAXIMO de animales detectados en una foto del",
         "grupo (la foto que mejor cubre el corral). Peso promedio = solo de",
         f"fotos a <= {ALTURA_PESO_CONFIABLE_M:.0f} m (escala mas confiable).",
@@ -438,8 +547,8 @@ def main() -> None:
     )
     ap.add_argument("--solo-conteo", action="store_true",
                     help="Solo contar animales, sin estimar peso")
-    ap.add_argument("--conf", type=float, default=0.15,
-                    help="Umbral de confianza YOLO (default 0.15)")
+    ap.add_argument("--conf", type=float, default=0.10,
+                    help="Umbral de confianza YOLO (default 0.10)")
     ap.add_argument("--categoria", default="novillo",
                     choices=["ternero", "vaquillona", "novillo",
                              "vaca_adulta", "toro", "desconocido"],
@@ -448,13 +557,16 @@ def main() -> None:
                     help="Primera foto a procesar (inclusive)")
     ap.add_argument("--hasta", default=None, metavar="DJI_0078",
                     help="Última foto a procesar (inclusive)")
-    ap.add_argument("--modelo", default="yolov8m.pt",
-                    help="Modelo YOLO (default yolov8m.pt)")
-    ap.add_argument("--imgsz", type=int, default=1920,
-                    help="Tamaño de inferencia YOLO (default 1920)")
-    ap.add_argument("--alt-max-anotar", type=float, default=30.5,
-                    help="Anotar JPG solo para fotos hasta esta altura "
-                         "(default 30 m; 0 = no anotar ninguna)")
+    ap.add_argument("--modelo", default="yolov8l-seg.pt",
+                    help="Modelo YOLO (default yolov8l-seg.pt; con un modelo "
+                         "sin '-seg' el peso vuelve al método bbox x 0.69)")
+    ap.add_argument("--imgsz", type=int, default=3840,
+                    help="Tamaño de inferencia YOLO (default 3840, casi "
+                         "resolución nativa; ultralytics lo ajusta a "
+                         "múltiplo de 32)")
+    ap.add_argument("--no-anotar", action="store_true",
+                    help="No guardar JPGs anotados (default: se anotan "
+                         "TODAS las fotos con detecciones)")
     args = ap.parse_args()
 
     print("Leyendo metadata EXIF/XMP de las fotos...")
@@ -463,9 +575,13 @@ def main() -> None:
         sys.exit("No hay fotos JPG que procesar con ese filtro.")
     print(f"  {len(fotos)} fotos encontradas en {DIR_FOTOS}")
 
-    print(f"Cargando YOLO ({args.modelo}, conf={args.conf}, imgsz={args.imgsz})...")
-    detector = crear_detector(args.modelo, args.conf, args.imgsz)
-    weight_model = None if args.solo_conteo else cargar_weight_model()
+    es_seg = "seg" in Path(args.modelo).stem.lower()
+    print(f"Cargando YOLO ({args.modelo}, conf={args.conf}, "
+          f"imgsz={args.imgsz}, peso por {'mascara' if es_seg else 'bbox x 0.69'})...")
+    yolo = crear_yolo(args.modelo)
+    # El weight_model se necesita aun con --solo-conteo para el filtro
+    # anti-sombra por área; solo se saltea la estimación de peso.
+    weight_model = cargar_weight_model()
 
     for i, meta in enumerate(fotos, 1):
         alt = f"{meta.altura_m:.0f}m" if meta.altura_m is not None else "alt?"
@@ -475,22 +591,24 @@ def main() -> None:
         if meta.error:
             print(f"SALTEADA: {meta.error}")
             continue
-        anotar = (args.alt_max_anotar > 0 and meta.altura_m is not None
-                  and meta.altura_m <= args.alt_max_anotar)
+        meta.metodo = "mask" if es_seg else "bbox"
         try:
-            procesar_foto(meta, detector, weight_model, args.categoria,
-                          args.solo_conteo, anotar, DIR_ANOTADAS)
+            procesar_foto(meta, yolo, weight_model, args.categoria,
+                          args.solo_conteo, not args.no_anotar,
+                          DIR_ANOTADAS, args.conf, args.imgsz)
         except Exception as e:
             meta.error = f"Error en detección: {e}"
             print(f"ERROR: {e}")
             continue
         prom, _, _ = _stats(meta.pesos_kg)
         extra = f", peso prom {prom} kg" if prom else ""
+        if meta.n_descartadas:
+            extra += f" ({meta.n_descartadas} descartadas por area)"
         print(f"{meta.n_animales} animales{extra}")
 
     csv_path = DIR_RESULTADOS / "resultados_fotos.csv"
     resumen_path = DIR_RESULTADOS / "resumen.txt"
-    escribir_csv(fotos, csv_path)
+    escribir_csv(fotos, csv_path, args.modelo)
     escribir_resumen(fotos, resumen_path, args.categoria, args.solo_conteo)
 
     print()
@@ -498,8 +616,9 @@ def main() -> None:
     print("LISTO. Resultados en:")
     print(f"  CSV por foto:    {csv_path}")
     print(f"  Resumen grupos:  {resumen_path}")
-    if args.alt_max_anotar > 0:
-        print(f"  Fotos anotadas:  {DIR_ANOTADAS}/")
+    if not args.no_anotar:
+        print(f"  Fotos anotadas:  {DIR_ANOTADAS}/ (contorno de mascara = "
+              "silueta SIN sombra)")
     print("Contrastar el 'Conteo maximo' y 'Peso promedio' de resumen.txt")
     print("con los datos reales de cada corral.")
 
