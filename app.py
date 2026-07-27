@@ -1662,16 +1662,27 @@ except Exception:
     _hdr_stats = ""
 
 _logo_html_hdr = ""
-# Logo blanco (knockout) para el header oscuro; fallback al logo color.
-_logo_path_hdr = Path("assets/logo_blanco.png")
-if not _logo_path_hdr.exists():
+# Logo del header: elegible en Configuración → Identidad HMS
+# ("blanco" knockout para fondo oscuro, o "color"). Persistido en DB.
+try:
+    _logo_pref_hdr = db.leer_preferencia("logo_header", "blanco") or "blanco"
+except Exception:
+    _logo_pref_hdr = "blanco"
+if _logo_pref_hdr == "color":
     _logo_path_hdr = Path("assets/logo.png")
+    if not _logo_path_hdr.exists():
+        _logo_path_hdr = Path("assets/logo_blanco.png")
+else:
+    _logo_path_hdr = Path("assets/logo_blanco.png")
+    if not _logo_path_hdr.exists():
+        _logo_path_hdr = Path("assets/logo.png")
 if _logo_path_hdr.exists():
     import base64 as _b64_hdr
     _logo_html_hdr = (
         '<img src="data:image/png;base64,'
         f'{_b64_hdr.b64encode(_logo_path_hdr.read_bytes()).decode()}" '
-        'style="width:68px;height:68px;object-fit:contain;" />'
+        'style="height:60px;width:auto;max-width:220px;'
+        'object-fit:contain;" />'
     )
 
 st.markdown(
@@ -1862,6 +1873,36 @@ with st.sidebar:
     st.divider()
     st.subheader("🎨 Identidad HMS")
     st.caption("Marca HMS · Verde #1B3E27 · Lima #8BC53F")
+
+    # ---- Logo del header (elección persistente en DB) ----
+    try:
+        _pref_logo_hdr = (
+            db.leer_preferencia("logo_header", "blanco") or "blanco"
+        )
+    except Exception:
+        _pref_logo_hdr = "blanco"
+    _ops_logo_hdr = {
+        "Blanco (fondo oscuro)": "blanco",
+        "Color": "color",
+    }
+    _sel_logo_hdr = st.radio(
+        "Logo del header",
+        list(_ops_logo_hdr.keys()),
+        index=1 if _pref_logo_hdr == "color" else 0,
+        horizontal=True,
+        key="logo_header_radio",
+        help="Qué versión del logo se muestra arriba de todo en la app.",
+    )
+    if _ops_logo_hdr[_sel_logo_hdr] != _pref_logo_hdr:
+        try:
+            db.guardar_preferencia(
+                "logo_header", _ops_logo_hdr[_sel_logo_hdr]
+            )
+            st.rerun()
+        except Exception as _e_logo_hdr:
+            st.warning(
+                f"No se pudo guardar la preferencia: {_e_logo_hdr}"
+            )
 
     def _buscar_archivo(prefijos: list) -> Optional[Path]:
         for prefijo in prefijos:

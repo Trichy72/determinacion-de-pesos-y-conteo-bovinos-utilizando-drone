@@ -3463,3 +3463,73 @@ def leer_dashboard_cache(
     if isinstance(data, dict):
         data["_edad_seg"] = edad
     return data
+
+
+# =====================================================================
+# PREFERENCIAS DE APP (clave/valor persistente en DB)
+# =====================================================================
+#
+# Tabla mínima para preferencias de UI que deben sobrevivir reinicios
+# y funcionar igual en local (SQLite) y en cloud (Supabase/Postgres).
+# Ej.: db.guardar_preferencia("logo_header", "color")
+#      db.leer_preferencia("logo_header", "blanco")
+
+# Bandera para no re-emitir el CREATE TABLE en cada llamada (evita
+# roundtrip extra a Postgres). Se resetea al reiniciar el proceso.
+_PREFS_INIT: dict = {"done": False}
+
+
+def _ensure_preferencias_table() -> None:
+    """Crea la tabla `preferencias_app` si no existe. Idempotente y
+    con sintaxis válida tanto en SQLite como en Postgres."""
+    if _PREFS_INIT["done"]:
+        return
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS preferencias_app (
+                       clave TEXT PRIMARY KEY,
+                       valor TEXT
+                   )"""
+            )
+        _PREFS_INIT["done"] = True
+    except Exception:
+        # No romper la app si no se puede crear (permisos, conexión).
+        # leer_preferencia devolverá el default.
+        pass
+
+
+@_invalida_cache
+def guardar_preferencia(clave: str, valor: str) -> None:
+    """Guarda (upsert) una preferencia clave→valor.
+
+    El UPSERT con `ON CONFLICT (clave) DO UPDATE` funciona igual en
+    SQLite (3.24+) y Postgres; el backend traduce los placeholders.
+    """
+    _ensure_preferencias_table()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO preferencias_app (clave, valor)
+               VALUES (?, ?)
+               ON CONFLICT (clave) DO UPDATE
+                 SET valor = excluded.valor""",
+            (clave, str(valor)),
+        )
+
+
+@_cache_lectura
+def leer_preferencia(clave: str, default: Optional[str] = None) -> Optional[str]:
+    """Devuelve el valor guardado para `clave`, o `default` si no
+    existe o la DB no está disponible."""
+    _ensure_preferencias_table()
+    try:
+        with get_conn() as conn:
+            r = conn.execute(
+                "SELECT valor FROM preferencias_app WHERE clave = ?",
+                (clave,),
+            ).fetchone()
+    except Exception:
+        return default
+    if not r:
+        return default
+    return r["valor"]
