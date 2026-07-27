@@ -1562,31 +1562,41 @@ st.markdown("""
         color: #1B3E27;
         border: 2px solid #1B3E27;
     }
-    /* Barra de pestañas principal — estilo HMS */
+    /* Barra de pestañas principal — píldoras estilo HMS */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 6px;
-        border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+        gap: 8px;
+        border-bottom: none;
+        padding: 4px;
         background: transparent;
     }
     .stTabs [data-baseweb="tab"] {
+        border-radius: 999px;
+        padding: 7px 18px;
         font-size: 0.88rem;
         font-weight: 600;
         letter-spacing: 0.02em;
-        padding-left: 14px;
-        padding-right: 14px;
         color: rgba(128, 132, 138, 0.95);
         border: none;
         background: transparent;
+        transition: background 0.15s ease, color 0.15s ease;
     }
     .stTabs [data-baseweb="tab"]:hover {
-        color: rgba(139, 197, 63, 0.85);
+        background: rgba(139, 197, 63, 0.12);
     }
     .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        color: #8BC53F !important;
+        background: #8BC53F !important;
+        color: #0B2012 !important;
     }
-    .stTabs [data-baseweb="tab-highlight"] {
-        background-color: #8BC53F;
-        height: 3px;
+    /* Ocultar la barrita indicadora nativa */
+    .stTabs [data-baseweb="tab-highlight"] { display: none; }
+    .stTabs [data-baseweb="tab-border"] { display: none; }
+    /* El label (texto + ícono material) hereda el color de la píldora */
+    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p {
+        margin: 0;
+        color: inherit;
+    }
+    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p span {
+        color: inherit;
     }
     /* Métricas */
     [data-testid="stMetricValue"] { color: #1B3E27; }
@@ -1963,17 +1973,17 @@ else:
 # ---------------------------------------------------------------------
 (tab_inicio, tab_clientes, tab_img, tab_vid, tab_evo, tab_avanzado,
  tab_ia, tab_historial, tab_config, tab_train, tab_help) = st.tabs([
-    "Inicio",
-    "Clientes/Lotes",
-    "Imagen",
-    "Video",
-    "Evolución",
-    "Análisis",
-    "Asesor IA",
-    "Historial",
-    "Configuración",
-    "Entrenamiento",
-    "Ayuda",
+    ":material/home: Inicio",
+    ":material/groups: Clientes/Lotes",
+    ":material/photo_camera: Imagen",
+    ":material/videocam: Video",
+    ":material/monitoring: Evolución",
+    ":material/science: Análisis",
+    ":material/neurology: Asesor IA",
+    ":material/history: Historial",
+    ":material/settings: Configuración",
+    ":material/school: Entrenamiento",
+    ":material/help: Ayuda",
 ])
 
 
