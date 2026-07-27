@@ -2170,28 +2170,36 @@ with tab_inicio:
     # app — es el "ojo del negocio": chequear el lote del cliente
     # con una llamada antes de que algo se complique.
     with _cont_llamados:
-        try:
-            # Generar sugerencias automáticas al cargar el dashboard.
-            # La función ya tiene dedup interno (ventana 14-21 días),
-            # así que no spamea aunque se llame en cada reload.
-            _n_nuevos = db.generar_sugerencias_recordatorios()
-            if _n_nuevos > 0:
-                st.toast(
-                    f"📞 {_n_nuevos} llamado(s) sugerido(s) por el "
-                    "sistema. Revisalos abajo.",
-                    icon="📞",
-                )
-        except Exception:
-            pass
+        # Generación de sugerencias + dedup: UNA sola vez por sesión.
+        # Streamlit re-ejecuta TODO app.py en cada interacción (cada
+        # mensaje del chat del Asesor IA incluido); correr estas
+        # funciones en cada rerun significaba varias queries no
+        # cacheadas a Supabase (~200ms c/u) + un UPDATE por rerun,
+        # y de paso invalidaba el cache de lecturas → app lenta.
+        if not st.session_state.get("_dedup_reco_done"):
+            try:
+                # Generar sugerencias automáticas al cargar el
+                # dashboard. La función tiene dedup interno
+                # (pendiente abierto o ventana 14-21 días).
+                _n_nuevos = db.generar_sugerencias_recordatorios()
+                if _n_nuevos > 0:
+                    st.toast(
+                        f"📞 {_n_nuevos} llamado(s) sugerido(s) por el "
+                        "sistema. Revisalos abajo.",
+                        icon="📞",
+                    )
+            except Exception:
+                pass
 
-        # Limpieza idempotente de duplicados históricos: si un
-        # cliente juntó varios sugeridos pendientes del mismo tipo
-        # (bug de la ventana de dedup, ya corregido), conservamos el
-        # más atrasado y cancelamos el resto. No toca manuales.
-        try:
-            db.dedup_recordatorios_pendientes()
-        except Exception:
-            pass
+            # Limpieza idempotente de duplicados históricos: si un
+            # cliente juntó varios sugeridos pendientes del mismo tipo
+            # (bug de la ventana de dedup, ya corregido), conservamos
+            # el más atrasado y cancelamos el resto. No toca manuales.
+            try:
+                db.dedup_recordatorios_pendientes()
+            except Exception:
+                pass
+            st.session_state["_dedup_reco_done"] = True
 
         _recos = []
         try:

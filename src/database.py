@@ -3179,7 +3179,6 @@ def armar_ficha_revision_cliente(cliente_id: int) -> dict:
     return out
 
 
-@_invalida_cache
 def generar_sugerencias_recordatorios() -> int:
     """Crea recordatorios automáticos basados en eventos del sistema:
 
@@ -3305,6 +3304,14 @@ def generar_sugerencias_recordatorios() -> int:
             except Exception:
                 pass
 
+    # Invalidación CONDICIONAL: solo si realmente se insertó algo.
+    # Antes esta función estaba decorada con @_invalida_cache y, como
+    # se llamaba en cada rerun de Streamlit, vaciaba el cache de
+    # lecturas (TTL 120s) en cada interacción aunque no creara nada
+    # → todas las queries volvían a Supabase (~200ms c/u) y la app
+    # entera (incluido el Asesor IA) se arrastraba.
+    if creados:
+        invalidar_cache_lecturas()
     return creados
 
 
