@@ -335,10 +335,30 @@ tab_rec, tab_foto = st.tabs(["📂 Recorrida completa", "🖼️ Foto suelta"])
 # TAB 1: Recorrida completa
 # ---------------------------------------------------------------------
 with tab_rec:
-    carpeta = st.text_input(
-        "Carpeta con las fotos de la recorrida (JPG del drone)",
-        value=str(DIR_FOTOS_DEFAULT),
+    # Menú de carpetas: subcarpetas de videos_drone/ que tengan JPGs,
+    # ordenadas por cantidad de fotos, + opción de escribir otra ruta.
+    _base_vd = DIR_FOTOS_DEFAULT.parent
+    _opciones_carpetas = []
+    try:
+        for _d in sorted(_base_vd.iterdir()):
+            if _d.is_dir() and _d.name != "resultados":
+                _n_jpg = len(list(_d.glob("*.JPG"))) + len(list(_d.glob("*.jpg")))
+                if _n_jpg:
+                    _opciones_carpetas.append((f"{_d.name}  ({_n_jpg} fotos)", _d))
+    except FileNotFoundError:
+        pass
+    _labels = [o[0] for o in _opciones_carpetas] + ["Otra carpeta (escribir ruta)…"]
+    _sel = st.selectbox(
+        "Carpeta con las fotos de la recorrida (JPG del drone)", _labels
     )
+    if _sel == "Otra carpeta (escribir ruta)…":
+        carpeta = st.text_input(
+            "Ruta de la carpeta (arrastrá la carpeta desde el Finder "
+            "hasta acá para pegar la ruta)",
+            value=str(DIR_FOTOS_DEFAULT),
+        )
+    else:
+        carpeta = str(dict(_opciones_carpetas)[_sel])
     if st.button("Procesar recorrida", type="primary"):
         try:
             fotos = rec.listar_fotos(Path(carpeta).expanduser())
