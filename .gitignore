@@ -85,3 +85,6 @@ backups/
 
 # ─── Fotos y videos de la tarjeta del drone (pesados + datos de clientes) ───
 videos_drone/
+
+# Config local de drone_app (URL de la base) — nunca a git
+.hms_local.env
