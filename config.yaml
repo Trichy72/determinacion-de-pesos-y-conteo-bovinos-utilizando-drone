@@ -46,7 +46,7 @@ estimacion_peso:
   # Cominotte et al.) para vacunos vistos desde arriba a 10m.
   # CALIBRAR con tu dataset usando scripts/calibrate_weight.py
   modelo: "potencia"             # "potencia" | "lineal" | "polinomial"
-  coef_a: 220.0                  # kg / m^(2b)
+  coef_a: 250.4                  # kg / m^(2b) — calibrado 27/7/26 vs balanza La Esperanza (corrales 3 y 5, fotos <=20m, error final +-3.5%)
   coef_b: 1.20
   offset_c: 0.0
   factores_raza:

@@ -585,10 +585,10 @@ def stats_corrales(fotos: List[FotoMeta]) -> List[dict]:
                  if f.altura_m is not None
                  and f.altura_m <= ALTURA_PESO_CONFIABLE_M
                  for p in f.pesos_kg]
-        c["alturas_altas"] = False
-        if not pesos:
-            pesos = [p for f in fg for p in f.pesos_kg]
-            c["alturas_altas"] = bool(pesos)
+        # Regla calibrada 27/7/26: el peso SOLO se mide con fotos <=20 m.
+        # Con fotos altas (50-100 m) la silueta sale gruesa y sesgada
+        # (corral 6 dio +22% vs balanza): mejor no informar peso.
+        c["alturas_altas"] = (not pesos) and any(f.pesos_kg for f in fg)
         c["n_pesados"] = len(pesos)
         c["peso_est"] = media_recortada(pesos)
 
@@ -687,11 +687,14 @@ def escribir_resumen(fotos: List[FotoMeta], path: Path, categoria: str,
         )
         if not solo_conteo:
             if c["peso_est"] is not None:
-                aviso = (" [OJO: solo fotos altas >20 m]"
-                         if c["alturas_altas"] else "")
                 lineas.append(
                     f"  Peso estimado (media recortada, {c['n_pesados']} "
-                    f"animales completos): {c['peso_est']:.0f} kg{aviso}"
+                    f"animales completos): {c['peso_est']:.0f} kg"
+                )
+            elif c["alturas_altas"]:
+                lineas.append(
+                    "  Peso estimado: SIN PESO CONFIABLE (solo hay fotos "
+                    ">20 m; para pesar volar a 10-20 m)"
                 )
             else:
                 lineas.append("  Peso estimado: sin animales completos pesados")
