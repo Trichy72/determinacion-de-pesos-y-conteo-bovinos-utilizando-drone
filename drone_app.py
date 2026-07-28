@@ -145,12 +145,26 @@ else:
 modelos_disponibles = sorted(p.name for p in REPO_ROOT.glob("*.pt"))
 if rec.MODELO_DEFAULT not in modelos_disponibles:
     modelos_disponibles.insert(0, rec.MODELO_DEFAULT)
+# Modelo fine-tuneado propio (notebooks/finetune_hms.ipynb): si está en la
+# raíz, va PRIMERO en el selector — es el mejor para detección/conteo.
+MODELO_HMS = "hms_bovinos.pt"
+if MODELO_HMS in modelos_disponibles:
+    modelos_disponibles.remove(MODELO_HMS)
+    modelos_disponibles.insert(0, MODELO_HMS)
 modelo = st.sidebar.selectbox(
     "Modelo YOLO", modelos_disponibles,
     index=modelos_disponibles.index(rec.MODELO_DEFAULT),
-    help="Con un modelo -seg el peso se calcula por máscara (sin sombra). "
-         "Sin -seg cae al método bbox x 0.69 (menos preciso).",
+    help="hms_bovinos (si está): fine-tuneado con tus fotos de drone, la "
+         "mejor detección/conteo. Con un modelo -seg el peso se calcula "
+         "por máscara (sin sombra). Sin -seg cae al método bbox x 0.69 "
+         "(menos preciso).",
 )
+if modelo == MODELO_HMS:
+    st.sidebar.info(
+        "**hms_bovinos**: mejor detección/conteo (fine-tuneado con tus "
+        "fotos). Es un modelo *detect* (sin máscaras): el peso cae al "
+        "método bbox × 0.69. **Para peso seguí usando yolov8l-seg.**"
+    )
 conf = st.sidebar.slider("Confianza mínima YOLO", 0.05, 0.50,
                          rec.CONF_DEFAULT, 0.01)
 categoria = st.sidebar.selectbox("Categoría (factor de peso)",

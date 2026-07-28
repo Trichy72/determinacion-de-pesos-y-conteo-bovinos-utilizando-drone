@@ -88,3 +88,7 @@ videos_drone/
 
 # Config local de drone_app (URL de la base) — nunca a git
 .hms_local.env
+
+# ─── Dataset de fine-tuning (imágenes de clientes, pesado) ───
+# Lo genera scripts/preparar_dataset.py; se sube a Colab a mano.
+dataset_bovinos*
