@@ -191,24 +191,17 @@ def _drone_stub_fn(*args, **kwargs):
 
 if _DRONE_LIBS_OK:
     try:
-        from src.calibration import calibrate, calibrate_from_altitude
         from src.detector import CattleDetector
-        from src.processor import (
-            export_results_csv,
-            process_image,
-            process_video,
-        )
+        from src.processor import process_video
         from src.weight_estimator import WeightModel
     except Exception:
         _DRONE_LIBS_OK = False
-        calibrate = calibrate_from_altitude = _drone_stub_fn
         CattleDetector = _DroneStub
-        export_results_csv = process_image = process_video = _drone_stub_fn
+        process_video = _drone_stub_fn
         WeightModel = _DroneStub
 else:
-    calibrate = calibrate_from_altitude = _drone_stub_fn
     CattleDetector = _DroneStub
-    export_results_csv = process_image = process_video = _drone_stub_fn
+    process_video = _drone_stub_fn
     WeightModel = _DroneStub
 from src.nutritional_analysis import (
     analizar_uniformidad, calcular_requerimientos, proyectar_peso,
@@ -236,19 +229,6 @@ from src.mapa_widget import render_mapa_seleccion
 from src import agent_memory as memoria
 from src import database as db
 from src import dashboard
-# training_helper importa cv2 → solo cargarlo si _DRONE_LIBS_OK.
-# En Streamlit Cloud lite queda deshabilitado y la pestaña de
-# entrenamiento del drone no está disponible. Usamos _DroneStub()
-# (no None) para que llamadas tipo `training.generar_xxx()` no
-# lancen AttributeError — devuelven None silenciosamente.
-if _DRONE_LIBS_OK:
-    try:
-        from src import training_helper as training
-    except Exception:
-        training = _DroneStub()
-        _DRONE_LIBS_OK = False
-else:
-    training = _DroneStub()
 db.init_db()
 
 
@@ -1741,134 +1721,9 @@ cfg = load_config()
 with st.sidebar:
     st.header("⚙️ Configuración")
     st.caption(
-        "Lo principal — marca, API IA y parámetros del drone solo cuando "
-        "estés en las pestañas de Imagen / Video."
+        "Lo principal — marca y API del Asesor IA. El procesamiento de "
+        "drone (imagen/video) se hace en la app local de la Mac."
     )
-
-    # ---------------------------------------------------------------
-    # Configuración del módulo DRONE — solo aparece si estás procesando
-    # ---------------------------------------------------------------
-    with st.expander("🐄 Parámetros módulo Drone (Imagen/Video)", expanded=False):
-        st.caption(
-            "Estos controles se aplican cuando proceses imagen o video. "
-            "Para uso normal podés dejarlos como están."
-        )
-
-        st.markdown("**Captura**")
-        altura = st.number_input(
-            "Altura de vuelo (m)",
-            min_value=2.0, max_value=50.0,
-            value=float(cfg["captura"]["altura_vuelo_m"]), step=0.5,
-        )
-        cfg["captura"]["altura_vuelo_m"] = altura
-
-        st.markdown("**Referencia en piso**")
-        metodo = st.selectbox(
-            "Método de detección",
-            ["aruco", "color_square"],
-            index=0 if cfg["referencia"]["metodo"] == "aruco" else 1,
-        )
-        cfg["referencia"]["metodo"] = metodo
-        lado = st.number_input(
-            "Lado del cuadrado (m)", min_value=0.3, max_value=3.0,
-            value=float(cfg["referencia"]["lado_m"]), step=0.01, format="%.2f",
-        )
-        cfg["referencia"]["lado_m"] = lado
-
-        st.markdown("**Detección YOLO**")
-        modo_tropa_densa = st.toggle(
-            "🐄🐄🐄 Modo tropa densa",
-            value=False,
-            help="Activalo cuando filmes lotes apretados (animales pegados, "
-                 "embudo, manga). Aumenta resolución, baja confianza, baja IoU NMS.",
-        )
-        if modo_tropa_densa:
-            modelo_path = st.selectbox(
-                "Modelo YOLO",
-                ["yolov8m-seg.pt", "yolov8l-seg.pt", "yolov8x-seg.pt"],
-                index=1,
-            )
-            conf = 0.05
-            iou = 0.35
-            imgsz = 1920
-            st.caption("Auto: conf=0.05, IoU=0.35, imgsz=1920")
-        else:
-            modelo_path = st.selectbox(
-                "Modelo YOLO",
-                ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt",
-                 "yolov8s-seg.pt", "yolov8m-seg.pt", "yolov8l-seg.pt"],
-                index=2,
-            )
-            conf = st.slider("Confianza mínima", 0.05, 0.9, 0.10, 0.05)
-            iou = st.slider("IoU NMS", 0.1, 0.9,
-                            float(cfg["deteccion"]["iou_threshold"]), 0.05)
-            imgsz = st.select_slider(
-                "Tamaño inferencia",
-                [640, 960, 1280, 1600, 1920], 1280,
-            )
-
-        st.markdown("**Estimación de peso**")
-        raza = st.selectbox(
-            "Raza predominante",
-            ["angus", "hereford", "brangus", "braford", "cruza", "desconocido"],
-            index=0,
-        )
-        try:
-            _cats_drone = db.nombres_categorias()
-        except Exception:
-            _cats_drone = []
-        if not _cats_drone:
-            _cats_drone = ["ternero", "vaquillona", "novillo",
-                           "vaca_adulta", "toro"]
-        _cats_drone = list(_cats_drone) + ["desconocido"]
-        _default_drone = ("vaquillona"
-                          if "vaquillona" in _cats_drone else _cats_drone[0])
-        categoria = st.selectbox(
-            "Categoría / edad",
-            _cats_drone,
-            index=_cats_drone.index(_default_drone),
-        )
-        ajuste_fino = st.slider(
-            "Ajuste fino de peso", 0.70, 1.30, 1.00, 0.01,
-            help="Multiplicador final. Calibrá una vez con balanza real.",
-        )
-
-        with st.expander("🧮 Calculadora de ajuste fino"):
-            st.caption(
-                "Cargá peso real de balanza vs peso de la app y "
-                "te dice dónde poner el slider."
-            )
-            peso_real = st.number_input(
-                "Peso REAL balanza (kg)",
-                min_value=50.0, max_value=1200.0, value=260.0, step=1.0,
-            )
-            peso_app = st.number_input(
-                "Peso APP (con ajuste = 1.00, kg)",
-                min_value=50.0, max_value=1200.0, value=260.0, step=1.0,
-            )
-            if peso_app > 0:
-                sugerido = peso_real / peso_app
-                error_actual = (peso_app - peso_real) / peso_real * 100
-                st.metric(
-                    "Ajuste sugerido", f"{sugerido:.2f}",
-                    f"{error_actual:+.1f}% error",
-                )
-                if abs(sugerido - 1.0) < 0.03:
-                    st.success("✅ Ya estás calibrado (<3% error)")
-                elif 0.70 <= sugerido <= 1.30:
-                    st.info(f"👉 Mové el slider a **{sugerido:.2f}**")
-                else:
-                    st.warning("⚠️ Fuera del rango — revisá calibración")
-
-        use_custom_model = st.toggle("Usar modelo peso calibrado (JSON)",
-                                      value=False)
-        weight_json = None
-        if use_custom_model:
-            wm_file = st.file_uploader("Subir weight_model.json",
-                                        type=["json"])
-            if wm_file:
-                weight_json = wm_file.read().decode("utf-8")
-                st.success("Modelo cargado.")
 
     st.divider()
     st.subheader("🎨 Identidad HMS")
@@ -2023,6 +1878,20 @@ with st.sidebar:
 # ---------------------------------------------------------------------
 # Carga de modelo
 # ---------------------------------------------------------------------
+# La UI de parámetros del drone se movió a la app local de la Mac
+# (drone_app.py). La pestaña Evolución todavía invoca el pipeline de
+# video, así que dejamos valores por defecto (en Streamlit Cloud el
+# detector es None y el pipeline queda deshabilitado, igual que antes).
+modo_tropa_densa = False
+modelo_path = "yolov8m.pt"
+conf = 0.10
+iou = float(cfg["deteccion"]["iou_threshold"])
+imgsz = 1280
+raza = "angus"
+categoria = "vaquillona"
+ajuste_fino = 1.00
+weight_json = None
+
 detector = load_detector(
     modelo_path, cfg["deteccion"]["clase_cow_id"], conf, iou, imgsz,
     modo_tropa_densa=modo_tropa_densa,
@@ -2041,18 +1910,15 @@ else:
 # ---------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------
-(tab_inicio, tab_clientes, tab_img, tab_vid, tab_evo, tab_avanzado,
- tab_ia, tab_historial, tab_config, tab_train, tab_help) = st.tabs([
+(tab_inicio, tab_clientes, tab_evo, tab_avanzado,
+ tab_ia, tab_historial, tab_config, tab_help) = st.tabs([
     ":material/home: Inicio",
     ":material/groups: Clientes/Lotes",
-    ":material/photo_camera: Imagen",
-    ":material/videocam: Video",
     ":material/monitoring: Evolución",
     ":material/science: Análisis",
     ":material/neurology: Asesor IA",
     ":material/history: Historial",
     ":material/settings: Configuración",
-    ":material/school: Entrenamiento",
     ":material/help: Ayuda",
 ])
 
@@ -5016,11 +4882,12 @@ with tab_inicio:
                     "</div>",
                     unsafe_allow_html=True,
                 )
-                if st.button("👉 Ir a Video drone", key="qa_drone",
+                if st.button("👉 Video drone (app local)", key="qa_drone",
                               width="stretch"):
                     st.info(
-                        "Hacé click en la pestaña **🎞️ Video 🐄** de arriba. "
-                        "Ahí subís el video del drone y te procesa conteo + peso."
+                        "El procesamiento de video del drone se hace en la "
+                        "**app local de la Mac**. Los resultados se guardan "
+                        "acá como pesadas del lote."
                     )
 
             with qa2:
@@ -5392,7 +5259,7 @@ def _render_seguimiento_completo_lote(lote_id_sel: int) -> None:
                     "—",
                     help=(
                         "Este lote no tiene pesadas registradas. "
-                        "Procesá un video desde la pestaña Video o "
+                        "Procesá un video con la app local de la Mac o "
                         "cargá una pesada manual."
                     ),
                 )
@@ -5482,7 +5349,8 @@ def _render_seguimiento_completo_lote(lote_id_sel: int) -> None:
     else:
         st.info(
             "Este lote no tiene pesadas registradas todavía. "
-            "Procesá un video en **🎞️ Video** y guardalo al historial."
+            "Procesá un video con la app local de la Mac y guardalo al "
+            "historial, o cargá una pesada manual."
         )
 
     # ---- Evolución del consumo de MS ----
@@ -12845,269 +12713,6 @@ with tab_clientes:
                     # primero que se ve. Lo que queda abajo son los
                     # expanders de configuración secundarios.
 
-# ----------------------------- IMAGEN ---------------------------------
-with tab_img:
-    file = st.file_uploader(
-        "Subí una imagen del lote (JPG/PNG)",
-        type=["jpg", "jpeg", "png"],
-        key="img_upload",
-    )
-    if file:
-        bytes_data = file.getvalue()
-        cache_key = _hash_bytes(
-            bytes_data, modelo_path, conf, iou, imgsz, raza, categoria,
-            ajuste_fino, cfg["referencia"]["metodo"], cfg["referencia"]["lado_m"],
-        )
-
-        if st.session_state.get("img_cache_key") != cache_key:
-            nparr = np.frombuffer(bytes_data, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if img is None:
-                st.error("No se pudo leer la imagen.")
-                st.stop()
-
-            with st.spinner("Detectando animales y estimando pesos…"):
-                annotated, result = process_image(
-                    img, detector, weight_model, cfg, raza, categoria,
-                    ajuste_fino=ajuste_fino,
-                )
-
-            _, png_buf = cv2.imencode(".png", annotated)
-            st.session_state["img_cache_key"] = cache_key
-            st.session_state["img_annotated_rgb"] = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-            st.session_state["img_png_bytes"] = png_buf.tobytes()
-            st.session_state["img_orig_name"] = file.name
-            st.session_state["img_n"] = result.n_animales
-            st.session_state["img_prom"] = result.peso_promedio_kg
-            st.session_state["img_total"] = result.peso_total_kg
-            st.session_state["img_desv"] = result.desvio_kg
-            st.session_state["img_cal_method"] = (
-                result.calibracion.method if result.calibracion else None
-            )
-            st.session_state["img_cal_ppm"] = (
-                result.calibracion.pixels_per_meter if result.calibracion else 0
-            )
-            st.session_state["img_animales"] = [
-                {"Animal": a.track_id, "Peso (kg)": round(a.peso_kg, 1)}
-                for a in result.animales
-            ]
-
-        # ---- Renderizar desde session_state ----
-        col1, col2 = st.columns([3, 2])
-        with col1:
-            st.image(
-                st.session_state["img_annotated_rgb"],
-                caption="Resultado",
-                use_column_width=True,
-            )
-        with col2:
-            st.metric("Animales detectados", st.session_state["img_n"])
-            st.metric("Peso promedio", f"{st.session_state['img_prom']:.1f} kg")
-            st.metric("Peso total del lote", f"{st.session_state['img_total']:.0f} kg")
-            st.metric("Desvío estándar", f"{st.session_state['img_desv']:.1f} kg")
-
-            if st.session_state.get("img_cal_method"):
-                st.caption(
-                    f"📏 Calibración: {st.session_state['img_cal_method']} — "
-                    f"{st.session_state['img_cal_ppm']:.0f} px/m"
-                )
-
-            df = pd.DataFrame(st.session_state["img_animales"])
-            st.dataframe(df, hide_index=True, width="stretch")
-
-            base_name = Path(st.session_state["img_orig_name"]).stem
-            st.download_button(
-                "📥 Descargar imagen anotada (PNG)",
-                data=st.session_state["img_png_bytes"],
-                file_name=f"{base_name}_anotado.png",
-                mime="image/png",
-                key="dl_img",
-            )
-            if not df.empty:
-                csv_bytes = df.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    "📥 Descargar tabla (CSV)",
-                    data=csv_bytes,
-                    file_name=f"{base_name}_pesos.csv",
-                    mime="text/csv",
-                    key="dl_img_csv",
-                )
-
-# ----------------------------- VIDEO ----------------------------------
-with tab_vid:
-    st.info(
-        "💡 **¿No usás drone con este cliente?** Podés cargar pesadas "
-        "manuales (balanza, manga, estimación) en la pestaña "
-        "**🏢 Clientes/Lotes** → seleccionar lote → "
-        "*'✏️ Cargar pesada manual'*. Las pesadas manuales se integran "
-        "igual con el resto del sistema (historial, ADG, asesor IA, dietas)."
-    )
-    file = st.file_uploader(
-        "Subí un video del lote (MP4/MOV)",
-        type=["mp4", "mov", "avi"],
-        key="vid_upload",
-    )
-
-    if file:
-        # Leer bytes una sola vez y calcular hash combinado con parámetros
-        bytes_data = file.getvalue()
-        cache_key = _hash_bytes(
-            bytes_data, modelo_path, conf, iou, imgsz, raza, categoria,
-            ajuste_fino, cfg["referencia"]["metodo"], cfg["referencia"]["lado_m"],
-        )
-
-        # Si ya procesamos exactamente este video con esta configuración,
-        # reusamos. La descarga de archivos NO dispara reprocesamiento.
-        if st.session_state.get("vid_cache_key") != cache_key:
-            with tempfile.NamedTemporaryFile(
-                suffix=Path(file.name).suffix, delete=False
-            ) as tmp:
-                tmp.write(bytes_data)
-                in_path = Path(tmp.name)
-
-            out_path = in_path.with_name(in_path.stem + "_anotado.mp4")
-            csv_path = in_path.with_name(in_path.stem + "_pesos.csv")
-
-            progress = st.progress(0.0, text="Procesando video…")
-
-            def cb(p: float):
-                progress.progress(min(p, 1.0), text=f"Procesando video… {p*100:.0f}%")
-
-            with st.spinner("Procesando — esto puede tardar varios minutos según duración"):
-                result = process_video(
-                    in_path, out_path, detector, weight_model, cfg,
-                    raza=raza, categoria=categoria,
-                    ajuste_fino=ajuste_fino, progress_cb=cb,
-                )
-                export_results_csv(result, csv_path)
-
-            progress.progress(1.0, text="¡Listo!")
-
-            # Guardar todo en session_state
-            st.session_state["vid_cache_key"] = cache_key
-            st.session_state["vid_out_path"] = str(out_path)
-            st.session_state["vid_csv_path"] = str(csv_path)
-            st.session_state["vid_video_bytes"] = out_path.read_bytes()
-            st.session_state["vid_csv_bytes"] = csv_path.read_bytes()
-            st.session_state["vid_orig_name"] = file.name
-            st.session_state["vid_n"] = result.n_animales
-            st.session_state["vid_prom"] = result.peso_promedio_kg
-            st.session_state["vid_total"] = result.peso_total_kg
-            st.session_state["vid_desv"] = result.desvio_kg
-            st.session_state["vid_calidad_pct"] = result.calidad_captura_pct
-            st.session_state["vid_frames_total"] = result.n_frames_total
-            st.session_state["vid_frames_validos"] = result.n_frames_validos
-            st.session_state["vid_frames_sin_ref"] = result.n_frames_sin_ref
-            st.session_state["vid_frames_tilted"] = result.n_frames_tilted
-            st.session_state["vid_animales"] = [
-                {"Animal": a.track_id, "Peso (kg)": round(a.peso_kg, 1)}
-                for a in result.animales
-            ]
-
-        # ---- Renderizar resultado desde session_state ----
-        col1, col2 = st.columns([3, 2])
-        with col1:
-            st.video(st.session_state["vid_out_path"])
-        with col2:
-            st.metric("Animales únicos", st.session_state["vid_n"])
-            st.metric("Peso promedio", f"{st.session_state['vid_prom']:.1f} kg")
-            st.metric("Peso total", f"{st.session_state['vid_total']:.0f} kg")
-            st.metric("Desvío estándar", f"{st.session_state['vid_desv']:.1f} kg")
-
-            df = pd.DataFrame(st.session_state["vid_animales"])
-            st.dataframe(df, hide_index=True, width="stretch")
-
-            # Panel de calidad de captura
-            calidad = st.session_state.get("vid_calidad_pct", 100)
-            sin_ref = st.session_state.get("vid_frames_sin_ref", 0)
-            tilted = st.session_state.get("vid_frames_tilted", 0)
-            total = st.session_state.get("vid_frames_total", 1)
-            if calidad >= 90:
-                st.success(
-                    f"✅ Calidad de captura: {calidad:.0f}% — "
-                    f"setup ideal, los pesos son confiables."
-                )
-            elif calidad >= 70:
-                st.warning(
-                    f"⚠️ Calidad de captura: {calidad:.0f}% — "
-                    f"{sin_ref} frames sin lona visible, {tilted} con cámara inclinada. "
-                    "Reforzá: lona siempre en cuadro y gimbal estable."
-                )
-            else:
-                st.error(
-                    f"🔴 Calidad baja: {calidad:.0f}% válidos. "
-                    f"Sin referencia: {sin_ref}/{total}, inclinados: {tilted}/{total}. "
-                    "El peso puede ser impreciso. Refilmá con mejor encuadre."
-                )
-
-            base_name = Path(st.session_state["vid_orig_name"]).stem
-            st.download_button(
-                "📥 Descargar video anotado",
-                data=st.session_state["vid_video_bytes"],
-                file_name=f"{base_name}_anotado.mp4",
-                mime="video/mp4",
-                key="dl_video",
-            )
-            st.download_button(
-                "📥 Descargar CSV de pesos",
-                data=st.session_state["vid_csv_bytes"],
-                file_name=f"{base_name}_pesos.csv",
-                mime="text/csv",
-                key="dl_csv",
-            )
-
-        # ----- GUARDAR AL HISTORIAL DEL LOTE -----
-        st.divider()
-        st.markdown("### 💾 Guardar esta pesada al histórico de un lote")
-        lotes_activos = db.listar_lotes(estado="activo")
-        if not lotes_activos:
-            st.info(
-                "No hay lotes activos para asociar. Cargá un cliente y un lote en "
-                "la pestaña **🏢 Clientes y Lotes** para guardar pesadas."
-            )
-        else:
-            col_g1, col_g2, col_g3 = st.columns([2, 1, 1])
-            with col_g1:
-                lote_guardar = st.selectbox(
-                    "Lote",
-                    [l["id"] for l in lotes_activos],
-                    format_func=lambda x: next(
-                        f"{l['cliente_nombre']} — {l['identificador']} "
-                        f"(corral {l.get('corral','—')})"
-                        for l in lotes_activos if l["id"] == x
-                    ),
-                    key="lote_para_pesada",
-                )
-            with col_g2:
-                fecha_pesada = st.date_input(
-                    "Fecha", value=datetime.now().date(), key="fecha_pes",
-                )
-            with col_g3:
-                notas_pesada = st.text_input("Notas (opcional)", key="notas_pes")
-
-            if st.button("💾 Guardar pesada al historial", type="primary"):
-                pesos_lista = [a["Peso (kg)"] for a in
-                               st.session_state["vid_animales"]]
-                try:
-                    pid = db.guardar_pesada(
-                        lote_id=lote_guardar,
-                        fecha=fecha_pesada.isoformat(),
-                        metodo="drone",
-                        cantidad_animales=st.session_state["vid_n"],
-                        peso_promedio_kg=st.session_state["vid_prom"],
-                        peso_total_kg=st.session_state["vid_total"],
-                        desvio_kg=st.session_state["vid_desv"],
-                        pesos_individuales=pesos_lista,
-                        video_path=st.session_state.get("vid_orig_name", ""),
-                        notas=notas_pesada,
-                    )
-                    st.success(
-                        f"✅ Pesada guardada (id {pid}). Vela en la pestaña "
-                        f"**📚 Historial**."
-                    )
-                except Exception as e:
-                    st.error(f"Error al guardar: {e}")
-
 # --------------------------- EVOLUCIÓN --------------------------------
 with tab_evo:
     st.markdown(
@@ -13299,12 +12904,17 @@ with tab_evo:
 with tab_avanzado:
     st.markdown(
         "### 🔬 Análisis estadístico y diagnóstico del lote\n"
-        "Esta pestaña usa el último video procesado en la pestaña 🎞️ Video. "
-        "Muestra percentiles, identifica outliers y diagnostica uniformidad."
+        "Esta pestaña usa el último video procesado con el módulo drone "
+        "(app local de la Mac). Muestra percentiles, identifica outliers "
+        "y diagnostica uniformidad."
     )
 
     if "vid_animales" not in st.session_state or not st.session_state.get("vid_animales"):
-        st.info("Procesá un video en la pestaña 🎞️ Video para ver el análisis.")
+        st.info(
+            "No hay resultados de video en esta sesión. El procesamiento "
+            "de drone (imagen/video) se hace en la app local de la Mac; "
+            "las pesadas guardadas se consultan en la pestaña 📚 Historial."
+        )
     else:
         animales_dict = [
             {"track_id": a["Animal"], "peso_kg": a["Peso (kg)"]}
@@ -15660,10 +15270,9 @@ with tab_config:
         c4.metric("Coeficiente b", cfg["estimacion_peso"]["coef_b"])
         c5.metric("Modelo", cfg["estimacion_peso"]["modelo"])
         st.caption(
-            "💡 Para edición de los parámetros del drone (altura, modelo "
-            "YOLO, etc.) usá la **sidebar** mientras estás procesando una "
-            "imagen o video. Para calibración profunda con balanza, andá a "
-            "🎓 Entrenamiento → Calibrar pesos."
+            "💡 La edición de los parámetros del drone (altura, modelo "
+            "YOLO, etc.) y la calibración profunda con balanza se hacen "
+            "en la app local de la Mac."
         )
 
     # ---- Sub-tab: Alertas por email ----
@@ -16399,336 +16008,6 @@ Cuando estés cómodo, en Twilio: **Messaging → Senders → WhatsApp** comprá
             st.warning(f"No se pudo leer historial WhatsApp: {e}")
 
 
-with tab_train:
-    st.markdown(
-        "### 🎓 Entrenamiento avanzado del modelo de drone\n"
-        "Para **alta densidad** y **precisión profesional** hay que entrenar "
-        "el modelo con tus videos. Acá tenés el flujo completo guiado."
-    )
-
-    sub_extr, sub_calib, sub_modelo, sub_guia = st.tabs([
-        "1️⃣ Extraer frames",
-        "2️⃣ Calibrar pesos con balanza",
-        "3️⃣ Importar modelo entrenado",
-        "📋 Guía completa",
-    ])
-
-    # ----- 1) Extracción de frames -----
-    with sub_extr:
-        st.markdown(
-            "**Subí uno o varios videos del drone** (preferentemente con "
-            "tropas densas y/o casos difíciles). El sistema saca frames "
-            "para que vos los etiquetes en Roboflow."
-        )
-
-        col_e1, col_e2 = st.columns(2)
-        with col_e1:
-            fps_obj = st.select_slider(
-                "Frames por segundo a extraer",
-                options=[0.5, 1.0, 2.0, 5.0],
-                value=1.0,
-                help="Más fps = más imágenes (más etiquetado, mejor modelo)",
-            )
-        with col_e2:
-            max_por_video = st.number_input(
-                "Máximo frames por video", min_value=20, max_value=500,
-                value=100, step=10,
-            )
-
-        videos_train = st.file_uploader(
-            "Videos (podés subir varios)",
-            type=["mp4", "mov", "avi"],
-            accept_multiple_files=True,
-            key="videos_train",
-        )
-
-        if videos_train and st.button(
-            "🎬 Extraer frames", type="primary",
-        ):
-            todos_frames = []
-            barra = st.progress(0)
-            for i, v in enumerate(videos_train):
-                with st.spinner(f"Procesando {v.name}..."):
-                    frames_v = training.extraer_frames_de_video(
-                        v.getvalue(),
-                        fps_objetivo=fps_obj,
-                        max_frames=int(max_por_video),
-                    )
-                    # Renombrar para incluir el nombre del video
-                    for f in frames_v:
-                        f["nombre"] = (
-                            f"{Path(v.name).stem}_" + f["nombre"]
-                        )
-                    todos_frames.extend(frames_v)
-                barra.progress((i + 1) / len(videos_train))
-            barra.empty()
-
-            if todos_frames:
-                st.success(
-                    f"✅ {len(todos_frames)} frames extraídos de "
-                    f"{len(videos_train)} video(s)"
-                )
-                # Generar ZIP
-                zip_bytes = training.crear_zip_dataset(
-                    todos_frames, nombre_proyecto="bovinos_drone",
-                )
-                st.download_button(
-                    "📦 Descargar ZIP listo para Roboflow",
-                    data=zip_bytes,
-                    file_name=f"dataset_bovinos_{datetime.now():%Y%m%d}.zip",
-                    mime="application/zip",
-                    type="primary",
-                )
-
-                # Preview
-                st.markdown("##### Preview de los primeros frames")
-                cols_p = st.columns(4)
-                for j, f in enumerate(todos_frames[:8]):
-                    with cols_p[j % 4]:
-                        st.image(f["bytes"], caption=f"t={f['segundo']:.1f}s",
-                                 use_column_width=True)
-
-    # ----- 2) Calibración con balanza -----
-    with sub_calib:
-        st.markdown(
-            "**Subí los pesos de balanza vs los pesos que dio la app** "
-            "para que calibre automáticamente el `ajuste_fino`. "
-            "Cuantos más pares, más preciso."
-        )
-        st.caption(
-            "El CSV debe tener 2 columnas: `peso_real_kg` (balanza) y "
-            "`peso_app_kg` (lo que dio la app antes de cualquier ajuste). "
-            "Mínimo 5 pares; ideal 15-30."
-        )
-
-        # Plantilla CSV descargable
-        plantilla_csv = pd.DataFrame({
-            "peso_real_kg": [285, 310, 295, 320, 280],
-            "peso_app_kg": [275, 298, 287, 308, 270],
-        })
-        st.download_button(
-            "📥 Descargar plantilla CSV",
-            data=plantilla_csv.to_csv(index=False).encode("utf-8"),
-            file_name="plantilla_calibracion.csv",
-            mime="text/csv",
-        )
-
-        archivo_cal = st.file_uploader(
-            "Subir CSV de pesadas comparativas",
-            type=["csv"], key="csv_calibracion",
-        )
-
-        if archivo_cal:
-            try:
-                df_cal = pd.read_csv(archivo_cal)
-                if "peso_real_kg" not in df_cal.columns or \
-                        "peso_app_kg" not in df_cal.columns:
-                    st.error("Faltan columnas: peso_real_kg, peso_app_kg")
-                else:
-                    pares = list(zip(
-                        df_cal["peso_real_kg"].tolist(),
-                        df_cal["peso_app_kg"].tolist(),
-                    ))
-                    aj_actual = st.session_state.get("ajuste_fino_value", 1.0)
-                    res = training.calibrar_ajuste_fino(
-                        pares, ajuste_actual=aj_actual,
-                    )
-
-                    st.success(
-                        f"✅ Calibración con {res.n_muestras} pares completada"
-                    )
-
-                    cm1, cm2, cm3 = st.columns(3)
-                    cm1.metric(
-                        "Ajuste fino óptimo",
-                        f"{res.ajuste_fino_optimo:.3f}",
-                        f"vs actual {aj_actual:.2f}",
-                    )
-                    cm2.metric(
-                        "MAPE óptimo",
-                        f"{res.mape_optimo:.1f}%",
-                        f"{res.mape_actual - res.mape_optimo:+.1f}% vs actual",
-                    )
-                    cm3.metric(
-                        "R²", f"{res.r2:.3f}",
-                        "calidad del ajuste",
-                    )
-
-                    # Tabla comparativa
-                    st.markdown("##### Pesos antes / después de calibrar")
-                    df_comp = pd.DataFrame({
-                        "Real (kg)": [round(x, 1) for x in res.pesos_reales],
-                        "App original (kg)": [round(x, 1) for x in res.pesos_app],
-                        "App calibrada (kg)": [round(x, 1) for x in res.pesos_corregidos],
-                        "Error post-calib (kg)": [
-                            round(c - r, 1)
-                            for r, c in zip(res.pesos_reales, res.pesos_corregidos)
-                        ],
-                    })
-                    st.dataframe(df_comp, hide_index=True, width="stretch")
-
-                    if res.mape_optimo < 5:
-                        st.success(
-                            f"🎯 Excelente — MAPE {res.mape_optimo:.1f}% < 5%. "
-                            f"Aplicá ajuste_fino = {res.ajuste_fino_optimo:.3f} "
-                            "en la sidebar."
-                        )
-                    elif res.mape_optimo < 8:
-                        st.info(
-                            f"✅ Buena calibración — MAPE {res.mape_optimo:.1f}%. "
-                            "Para bajar más, sumá más pares o entrená el "
-                            "modelo (paso 3)."
-                        )
-                    else:
-                        st.warning(
-                            f"⚠️ MAPE {res.mape_optimo:.1f}% — todavía alto. "
-                            "Probablemente el modelo de detección está "
-                            "subestimando o sobreestimando áreas. "
-                            "Conviene fine-tuning con tus videos."
-                        )
-
-                    if abs(res.sesgo_kg) > 5:
-                        st.warning(
-                            f"⚠️ Sesgo sistemático de {res.sesgo_kg:+.1f} kg. "
-                            "El modelo está siempre por encima/debajo. "
-                            "Calibrar ayuda pero el fine-tuning es la solución real."
-                        )
-
-                    st.caption(
-                        f"Rango de confianza individual (95%): "
-                        f"{res.rangos_confianza[0]:.0f} a "
-                        f"{res.rangos_confianza[1]:.0f} kg de error por animal"
-                    )
-
-            except Exception as e:
-                st.error(f"Error procesando CSV: {e}")
-
-    # ----- 3) Importar modelo entrenado -----
-    with sub_modelo:
-        st.markdown(
-            "Si ya entrenaste un modelo con Colab (paso de la guía), "
-            "**subí el archivo `.pt` acá** para que la app lo use."
-        )
-
-        modelo_subido = st.file_uploader(
-            "Subir modelo .pt entrenado", type=["pt"],
-            key="upload_pt",
-        )
-        if modelo_subido:
-            Path("models").mkdir(exist_ok=True)
-            modelo_dest = Path(f"models/{modelo_subido.name}")
-            with open(modelo_dest, "wb") as f:
-                f.write(modelo_subido.getvalue())
-
-            with st.spinner("Validando modelo..."):
-                info = training.validar_modelo_yolo(modelo_dest)
-
-            if info["valido"]:
-                st.success(
-                    f"✅ Modelo cargado: {modelo_dest.name} "
-                    f"({info['tamano_mb']:.1f} MB)"
-                )
-                st.markdown(f"**Clases**: {', '.join(info.get('clases', [])) or 'desconocidas'}")
-                st.markdown(f"**Tarea**: {info.get('task', '?')}")
-                st.info(
-                    f"Para usarlo: en la sidebar, en el campo 'Modelo YOLO', "
-                    f"escribí `{modelo_dest}` (en lugar de yolov8m.pt)"
-                )
-            else:
-                st.error(f"❌ Modelo no válido: {info.get('error', 'desconocido')}")
-
-        # Listar modelos importados
-        modelos_locales = list(Path("models").glob("*.pt")) if Path("models").exists() else []
-        if modelos_locales:
-            st.markdown("##### Modelos disponibles localmente")
-            for m in modelos_locales:
-                col_m1, col_m2 = st.columns([3, 1])
-                col_m1.markdown(f"📦 **{m.name}** ({m.stat().st_size / 1024 / 1024:.1f} MB)")
-                if col_m2.button("🗑️", key=f"del_model_{m.name}"):
-                    m.unlink()
-                    st.rerun()
-
-    # ----- 4) Guía completa -----
-    with sub_guia:
-        st.markdown("""
-### 📋 Flujo completo para tener un modelo profesional
-
-#### Etapa A: Generar dataset (1-2 hs total)
-
-1. **Filmar variedad de casos**: tropas chicas, tropas densas, distintas razas, distintos pisos. Cuanto más variado, mejor el modelo.
-2. **Extraer frames** (paso 1️⃣ arriba): subí 5-10 videos, extraé ~500-1000 frames totales.
-3. **Subí el ZIP a [Roboflow](https://roboflow.com)** (gratis hasta 10k imágenes):
-   - Nuevo proyecto → Object Detection → YOLOv8
-   - Drag & drop el ZIP
-   - **Auto-Label** asistido: te pre-dibuja las cajas con clase "cow"/"sheep"
-   - Vos sólo corregís, agregás los que faltaron, sacás falsos positivos
-   - **Importante**: usar UNA SOLA clase llamada "bovino"
-
-#### Etapa B: Entrenar (1-2 hs en Colab gratis con GPU)
-
-1. **Bajá el notebook** desde el botón abajo
-2. Subilo a [Google Colab](https://colab.research.google.com)
-3. **Activá GPU**: Entorno de ejecución → Cambiar tipo → T4 GPU (gratis)
-4. Subí el ZIP del dataset etiquetado de Roboflow al panel "Files"
-5. Ejecutá las celdas en orden
-6. Al final descargás el `best.pt`
-
-#### Etapa C: Usar el modelo en la app
-
-1. Volvé al paso 3️⃣ "Importar modelo entrenado"
-2. Subí el `best.pt`
-3. En la sidebar, en "Modelo YOLO", elegí o escribí `models/best.pt`
-4. ¡Listo! La app usa tu modelo.
-
-#### Etapa D: Calibrar pesos contra balanza
-
-1. Pasá un lote por la app (con tu modelo nuevo) y por balanza real
-2. Anotá ambos pesos individuales en CSV (al menos 15-20 pares)
-3. Subí el CSV en el paso 2️⃣ "Calibrar pesos con balanza"
-4. La app calcula automáticamente el `ajuste_fino` óptimo
-5. Anotalo y dejalo fijo en el slider de la sidebar
-
-#### 🎯 Resultado esperado
-
-| Métrica | Sin entrenar | Con fine-tuning + calibración |
-|---------|--------------|-------------------------------|
-| Recall conteo (tropa densa) | 50-60% | 92-98% |
-| MAPE peso individual | 8-15% | 2-4% |
-| MAPE peso promedio del lote | 5-8% | <2% |
-
-#### Costo
-
-| Recurso | Costo |
-|---------|-------|
-| Roboflow (etiquetado) | Gratis hasta 10k imgs |
-| Google Colab (entrenar) | Gratis con GPU T4 |
-| **TOTAL** | **$0** + tu tiempo |
-""")
-
-        # Botón para descargar el notebook Colab
-        st.markdown("---")
-        # Solo tiene sentido si las libs de drone (ultralytics/cv2) están
-        # disponibles: en Streamlit Cloud (free tier) las deshabilitamos
-        # por límite de RAM, así que ocultamos el botón (evita crash con
-        # data=None cuando training es _DroneStub).
-        if _DRONE_LIBS_OK:
-            notebook_bytes = training.generar_notebook_colab()
-            st.download_button(
-                "📥 Descargar notebook Colab listo",
-                data=notebook_bytes,
-                file_name="finetune_bovinos.ipynb",
-                mime="application/json",
-                type="primary",
-            )
-        else:
-            st.info(
-                "🚫 Descarga del notebook Colab no disponible en el "
-                "deploy cloud. Requiere `ultralytics + torch + opencv`, "
-                "que superan el límite de RAM del free tier. Usá esta "
-                "pestaña desde tu Mac local."
-            )
-
-
 # ----------------------------- AYUDA ----------------------------------
 with tab_help:
     with st.expander("📇 Datos de contacto HMS", expanded=False):
@@ -16745,14 +16024,17 @@ with tab_help:
         """
 ### Cómo usar la app
 
-1. **Captura con drone** — vuelo cenital (90°) a ~10 m de altura, 4K @ 30 fps.
+1. **Procesamiento de drone (imagen / video / entrenamiento)** — se hace en
+   la **app local de la Mac** (`drone_app.py`), no en esta app online. Ahí
+   se cargan los vuelos, se cuentan los animales y se estiman los pesos.
+
+2. **Captura con drone** — vuelo cenital (90°) a ~10 m de altura, 4K @ 30 fps.
    Incluí en el encuadre una **referencia conocida** en el piso (un marcador
    ArUco impreso de 1,02 m × 1,02 m, o un cuadrado de cinta de color sólido).
 
-2. **Subí la imagen o video** en la pestaña correspondiente.
-
-3. **Configurá la raza predominante** en la barra lateral. Eso ajusta el
-   factor de corrección del modelo de peso.
+3. **Cargá o guardá las pesadas** — desde la app local de la Mac, o
+   manualmente en **Clientes/Lotes → Cargar pesada manual**. Después las
+   consultás en **Historial**, **Evolución** y el **Asesor IA**.
 
 4. **Calibración personalizada**: si ya tenés un dataset propio (imagen +
    peso real), corré el script de calibración:
@@ -16762,10 +16044,9 @@ with tab_help:
        --output models/weight_model.json
    ```
 
-   Luego, en la barra lateral, activá *“Usar modelo de peso calibrado”* y
-   subí el JSON resultante.
+   El JSON resultante se usa en la app local de la Mac.
 
-### Para alcanzar el <5 % de error
+### Para alcanzar el <5 % de error (app local de la Mac)
 
 - Usá el modelo `yolov8m-seg.pt` (segmentación) — el área proyectada es
   mucho más fiel que el bounding box.
@@ -16777,7 +16058,8 @@ with tab_help:
 ### Estructura del proyecto
 
 ```
-app.py                   ← UI Streamlit
+app.py                   ← UI Streamlit online (gestión)
+drone_app.py             ← App local Mac (procesamiento drone)
 config.yaml              ← Parámetros
 src/
   calibration.py         ← Detección de la referencia
