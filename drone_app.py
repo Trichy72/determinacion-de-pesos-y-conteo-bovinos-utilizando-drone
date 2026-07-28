@@ -532,8 +532,16 @@ with tab_foto:
                     st.warning("Foto a más de 20 m: el conteo vale, pero el "
                                "peso no es confiable (volar a 10-20 m).")
                 elif f.pesos_kg:
-                    st.metric("Peso promedio (animales completos)",
-                              f"{sum(f.pesos_kg)/len(f.pesos_kg):.0f} kg")
+                    _mr = rec.media_recortada(f.pesos_kg)
+                    st.metric(
+                        "Peso promedio (media recortada)",
+                        f"{_mr:.0f} kg" if _mr is not None
+                        else f"{sum(f.pesos_kg)/len(f.pesos_kg):.0f} kg",
+                        help="Media recortada 10%: descarta los pesos "
+                             "extremos (siluetas dobles o parciales). "
+                             "Los animales cortados en el borde ya están "
+                             "excluidos (etiqueta 'borde').",
+                    )
                 elif f.altura_m is None:
                     st.warning("Sin RelativeAltitude en el XMP: no se puede "
                                "calcular la escala ni el peso.")
