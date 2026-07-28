@@ -303,6 +303,81 @@ def ui_guardar_en_ficha(key: str, resumen: dict, fecha_default: date):
                    f"({fecha.isoformat()}). Ya aparece en {destino}.")
 
 
+@st.cache_data(show_spinner=False)
+def _info_video_cacheada(path_str: str, mtime: float):
+    """Duración/fps del MP4 leídos del header (barato). mtime invalida
+    el cache si el archivo cambia. Devuelve None si cv2 no puede."""
+    try:
+        return rec.info_video(Path(path_str))
+    except Exception:
+        return None
+
+
+def ui_guardar_conteo_video(res, nombre_video: str):
+    """Selector cliente/lote + botón que registra el conteo del video en
+    la ficha como movimiento 'conteo_drone' (signo 0: NO toca el stock).
+    Sin peso: los MP4 del drone no traen altura, no hay escala posible."""
+    st.markdown("##### Guardar el conteo en la ficha del cliente")
+    if res.n_animales <= 0:
+        st.info("No hay animales confirmados para guardar.")
+        return
+    try:
+        clientes = db.listar_clientes()
+    except Exception as e:
+        st.error(f"No pude leer los clientes de la base: {e}")
+        return
+    if not clientes:
+        st.warning("No hay clientes cargados en la base.")
+        return
+
+    c1, c2, c3 = st.columns([2, 2, 1])
+    cli = c1.selectbox(
+        "Cliente", clientes, key="cli_video",
+        format_func=lambda c: c["nombre"] + (
+            f" ({c['establecimiento']})" if c.get("establecimiento") else ""),
+    )
+    lotes = db.listar_lotes(cliente_id=cli["id"])
+    if not lotes:
+        c2.warning("Ese cliente no tiene lotes.")
+        return
+    lote = c2.selectbox(
+        "Lote", lotes, key="lote_video",
+        format_func=lambda l: f"{l['identificador']}" + (
+            f" — corral {l['corral']}" if l.get("corral") else ""),
+    )
+    fecha = c3.date_input("Fecha de la pasada", value=date.today(),
+                          key="fecha_video")
+
+    detalles = (f"Conteo por drone (video {nombre_video}): "
+                f"{res.n_animales} animales únicos por tracking "
+                f"({res.duracion_s/60:.1f} min de video, "
+                f"1 de cada {res.stride} frames, BoT-SORT). "
+                f"Sin peso: el video no registra altura de vuelo.")
+    st.caption("Se guardará como movimiento **“Conteo por drone (no "
+               "cambia el stock)”** en la ficha del lote — aparece en la "
+               f"tabla de movimientos de la app online. Obs.: “{detalles}”")
+
+    if st.button("Guardar conteo en ficha", key="btn_video",
+                 type="primary"):
+        try:
+            mid = db.crear_movimiento_lote(
+                lote_id=lote["id"],
+                fecha=fecha.isoformat(),
+                tipo="conteo_drone",
+                cantidad=res.n_animales,
+                detalles=detalles,
+            )
+        except Exception as e:
+            st.error(f"No pude guardar el conteo: {e}")
+            return
+        destino = ("la ficha online" if backend == "postgres"
+                   else "la base LOCAL (no visible online)")
+        st.success(f"Conteo #{mid} guardado en el lote "
+                   f"{lote['identificador']} de {cli['nombre']} "
+                   f"({fecha.isoformat()}): {res.n_animales} animales. "
+                   f"Ya aparece en {destino}.")
+
+
 def galeria_anotadas(fotos, dir_anotadas: Path, key: str):
     anotadas = [dir_anotadas / f"{f.nombre}_anotada.jpg" for f in fotos]
     anotadas = [p for p in anotadas if p.exists()]
@@ -329,7 +404,8 @@ def mostrar_errores(fotos):
 # =====================================================================
 st.title("Recorridas con drone — conteo y peso calibrado")
 
-tab_rec, tab_foto = st.tabs(["📂 Recorrida completa", "🖼️ Foto suelta"])
+tab_rec, tab_foto, tab_video = st.tabs(
+    ["📂 Recorrida completa", "🖼️ Foto suelta", "🎬 Video (conteo)"])
 
 # ---------------------------------------------------------------------
 # TAB 1: Recorrida completa
@@ -471,3 +547,122 @@ with tab_foto:
                            file_name="fotos_sueltas.csv", mime="text/csv",
                            key="csv_sueltas")
         ui_guardar_en_ficha("sueltas", r, fecha_recorrida(fotos))
+
+# ---------------------------------------------------------------------
+# TAB 3: Video (conteo)
+# ---------------------------------------------------------------------
+with tab_video:
+    st.info(
+        "**El conteo por video es la referencia del corral completo; el "
+        "peso sale de las fotos a 10-20 m.** Los MP4 del drone no traen "
+        "altura (RelativeAltitude), así que acá NO se estima peso: solo "
+        "se cuentan animales únicos con tracking (BoT-SORT) para no "
+        "contar dos veces al que se mueve."
+    )
+
+    # Menú de videos: MP4/MOV de las carpetas de videos_drone/, con
+    # tamaño y duración (leída del header, barata), + otra ruta a mano.
+    # NO usamos file_uploader: son archivos de 300-500 MB y el uploader
+    # los copiaría enteros; elegirlos del disco es directo.
+    _videos = rec.listar_videos(DIR_FOTOS_DEFAULT.parent)
+    _opciones_videos = []
+    for _v in _videos:
+        try:
+            _stat = _v.stat()
+        except OSError:
+            continue
+        _mb = _stat.st_size / 1_000_000
+        _info = _info_video_cacheada(str(_v), _stat.st_mtime)
+        _dur = (f", {_info['duracion_s']:.0f} s" if _info
+                and _info.get("duracion_s") else "")
+        _opciones_videos.append(
+            (f"{_v.parent.name}/{_v.name}  ({_mb:.0f} MB{_dur})", _v))
+    _labels_v = ([o[0] for o in _opciones_videos]
+                 + ["Otra ruta (escribir)…"])
+    _sel_v = st.selectbox("Video de la pasada (MP4 del drone)", _labels_v)
+    if _sel_v == "Otra ruta (escribir)…":
+        ruta_video = st.text_input(
+            "Ruta del video (arrastrá el archivo desde el Finder hasta "
+            "acá para pegar la ruta)", value="")
+    else:
+        ruta_video = str(dict(_opciones_videos)[_sel_v])
+
+    cv1, cv2_ = st.columns([2, 1])
+    stride = cv1.slider(
+        "Procesar 1 de cada N frames", 1, 10, rec.VIDEO_STRIDE_DEFAULT,
+        help="El pipeline viejo procesaba TODOS los frames (necesitaba "
+             "la lona por frame para el peso). Para contar alcanza con "
+             "menos: a 30 fps, 3 = 10 fps efectivos y BoT-SORT "
+             "(track_buffer 90) mantiene los IDs sin problema. No subir "
+             "de 5-6: el tracker necesita continuidad entre frames.")
+    generar_video = cv2_.checkbox(
+        "Generar video anotado", value=True,
+        help="Apagalo para terminar antes: quedan igual 4 frames "
+             "anotados de muestra.")
+
+    if st.button("Contar animales del video", type="primary",
+                 key="btn_procesar_video"):
+        _p = Path(ruta_video).expanduser() if ruta_video.strip() else None
+        if _p is None or not _p.is_file():
+            st.error(f"No existe el video: {ruta_video or '(vacío)'}")
+        else:
+            barra_v = st.progress(0.0, text="Cargando modelo YOLO…")
+
+            def _cb_video(frac: float, n_parcial: int) -> None:
+                barra_v.progress(frac, text=f"Procesando… {frac*100:.0f}% "
+                                 f"— {n_parcial} animales únicos hasta "
+                                 f"ahora")
+
+            _out_dir = Path(tempfile.mkdtemp(prefix="drone_video_"))
+            try:
+                _res_v = rec.contar_video(
+                    _p, modelo=modelo, conf=conf, stride=stride,
+                    out_dir=_out_dir, progress_cb=_cb_video,
+                    generar_video=generar_video)
+            except Exception as e:
+                st.error(f"Error procesando el video: {e}")
+                _res_v = None
+            if _res_v is not None:
+                barra_v.progress(1.0, text="Listo.")
+                st.session_state["video_conteo"] = {
+                    "res": _res_v, "video": _p.name,
+                    "cuando": datetime.now(),
+                }
+
+    res_v = st.session_state.get("video_conteo")
+    if res_v:
+        r_v = res_v["res"]
+        st.markdown(f"### Resultado — {res_v['video']}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Conteo total del corral", f"{r_v.n_animales} animales")
+        m2.metric("Duración procesada", f"{r_v.duracion_s/60:.1f} min")
+        m3.metric("Frames procesados",
+                  f"{r_v.n_frames_procesados} de {r_v.n_frames_video}")
+        st.caption(
+            f"Confirmado = track visto en ≥{r_v.min_frames} frames "
+            f"procesados (mismo umbral que el pipeline histórico de "
+            f"video); {r_v.n_tracks_totales} IDs vistos en total, "
+            f"renumerados 1..{r_v.n_animales}. Tracker BoT-SORT "
+            f"(botsort_robusto.yaml, track_buffer 90), stride "
+            f"{r_v.stride}, modelo {modelo}."
+        )
+        if r_v.video_anotado and r_v.video_anotado.exists():
+            if r_v.codec == "avc1":
+                st.video(str(r_v.video_anotado))
+            else:
+                st.warning(
+                    "El video anotado quedó en códec mp4v (el navegador "
+                    "no lo reproduce). Abrilo con QuickTime: "
+                    f"`{r_v.video_anotado}`")
+        if r_v.frames_muestra:
+            _existentes = [p for p in r_v.frames_muestra if p.exists()]
+            if _existentes:
+                with st.expander(
+                        f"Ver {len(_existentes)} frames anotados de "
+                        "muestra", expanded=not r_v.video_anotado):
+                    cols_v = st.columns(2)
+                    for i, p in enumerate(_existentes):
+                        cols_v[i % 2].image(str(p), caption=p.stem,
+                                            use_container_width=True)
+        st.markdown("---")
+        ui_guardar_conteo_video(r_v, res_v["video"])

@@ -1496,12 +1496,16 @@ def eliminar_lote(lote_id: int) -> None:
 
 # Tipos de movimiento y su signo sobre la cantidad del lote.
 # Los que SUMAN animales al lote tienen signo +1; los que SACAN, -1.
+# "conteo_drone" tiene signo 0: registra el conteo de la pasada del
+# drone (video) en la ficha SIN modificar el stock del lote — es una
+# verificación, no un ingreso/egreso.
 MOVIMIENTO_TIPOS = {
     "muerte": -1,
     "venta": -1,
     "traslado_egreso": -1,
     "traslado_ingreso": +1,
     "ingreso": +1,
+    "conteo_drone": 0,
 }
 
 # Etiquetas amigables para mostrar al usuario.
@@ -1511,6 +1515,7 @@ MOVIMIENTO_LABELS = {
     "traslado_egreso": "Traslado (sale del lote)",
     "traslado_ingreso": "Traslado (entra al lote)",
     "ingreso": "Ingreso (compra / nacimiento)",
+    "conteo_drone": "Conteo por drone (no cambia el stock)",
 }
 
 

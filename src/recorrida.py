@@ -546,3 +546,246 @@ def escribir_csv(fotos: List[FotoMeta], path: Path, modelo: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerows(filas_csv(fotos, modelo))
+
+
+# ----------------------------------------------------------------------
+# Conteo por VIDEO — tracking BoT-SORT, SIN peso (el MP4 no trae altura)
+# ----------------------------------------------------------------------
+# Reusa el pipeline de video histórico del repo:
+#   - src/detector.py  -> CattleDetector.track() (mismas clases COCO)
+#   - botsort_robusto.yaml (re-id por apariencia, track_buffer 90,
+#     compensación de movimiento de cámara) — igual que config.yaml
+#   - min_frames = 2 para confirmar un track (igual que process_video
+#     en src/processor.py) y renumeración 1..N por orden de aparición.
+# Diferencia: el pipeline viejo procesaba TODOS los frames (necesitaba
+# la lona de calibración por frame para el peso). Acá solo contamos, así
+# que procesamos 1 de cada STRIDE frames: a 30 fps, stride 3 = 10 fps
+# efectivos, más que suficiente para que BoT-SORT mantenga los IDs
+# (track_buffer 90 frames procesados = 27 s reales de memoria por ID).
+
+VIDEO_STRIDE_DEFAULT = 3
+VIDEO_MIN_FRAMES = 2          # mismo umbral que src/processor.py
+VIDEO_IMGSZ = 1920            # videos 4K; el pipeline viejo usaba 1280
+VIDEO_CONF_DEFAULT = 0.15     # el que usaba config.yaml para video
+TRACKER_VIDEO = "botsort_robusto.yaml"
+VIDEO_EXTS = {".mp4", ".mov", ".avi"}
+
+
+def listar_videos(base: Path) -> List[Path]:
+    """Videos bajo `base` (recursivo), salteando la carpeta resultados."""
+    if not base.is_dir():
+        return []
+    return sorted(
+        p for p in base.rglob("*")
+        if p.is_file() and p.suffix.lower() in VIDEO_EXTS
+        and "resultados" not in p.parts
+    )
+
+
+def info_video(path: Path) -> Optional[dict]:
+    """Metadata barata del contenedor (no decodifica frames):
+    fps, cantidad de frames, resolución y duración en segundos.
+    Devuelve None si cv2 no está o el archivo no se puede abrir."""
+    try:
+        import cv2
+    except ImportError:
+        return None
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    info = {
+        "fps": float(fps),
+        "n_frames": n,
+        "ancho": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        "alto": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        "duracion_s": (n / fps) if fps else 0.0,
+    }
+    cap.release()
+    return info
+
+
+@dataclass
+class ResultadoVideo:
+    """Resultado del conteo por tracking sobre un video de la pasada."""
+    n_animales: int = 0            # tracks confirmados (>= min_frames)
+    n_tracks_totales: int = 0      # IDs vistos, incluidos los fugaces
+    n_frames_video: int = 0
+    n_frames_procesados: int = 0
+    fps: float = 0.0
+    duracion_s: float = 0.0
+    stride: int = VIDEO_STRIDE_DEFAULT
+    min_frames: int = VIDEO_MIN_FRAMES
+    video_anotado: Optional[Path] = None
+    codec: str = ""                # "avc1" reproduce en navegador; "mp4v" no
+    frames_muestra: List[Path] = field(default_factory=list)
+
+
+def _anotar_frame_video(frame, dets, n_confirmados):
+    """Dibuja bboxes con #id y la barra de resumen del conteo."""
+    import cv2
+    out = frame.copy()
+    for d in dets:
+        x1, y1, x2, y2 = (int(d.x1), int(d.y1), int(d.x2), int(d.y2))
+        cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 3)
+        if d.track_id is not None:
+            texto = f"#{d.track_id}"
+            cv2.putText(out, texto, (x1 + 4, max(30, y1 - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 6)
+            cv2.putText(out, texto, (x1 + 4, max(30, y1 - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 2)
+    h, w = out.shape[:2]
+    barra = out.copy()
+    cv2.rectangle(barra, (0, 0), (w, 70), (0, 0, 0), -1)
+    out = cv2.addWeighted(barra, 0.55, out, 0.45, 0)
+    cv2.putText(out, f"Animales unicos (confirmados): {n_confirmados}",
+                (14, 48), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3)
+    return out
+
+
+def contar_video(
+    video_path: Path,
+    modelo: str,
+    conf: float,
+    stride: int,
+    out_dir: Path,
+    progress_cb: Optional[Callable[[float, int], None]] = None,
+    generar_video: bool = True,
+    min_frames: int = VIDEO_MIN_FRAMES,
+    imgsz: int = VIDEO_IMGSZ,
+    repo_root: Path = REPO_ROOT,
+) -> ResultadoVideo:
+    """Conteo TOTAL del corral desde el video de la pasada.
+
+    Tracking con el detector histórico (src/detector.py) + BoT-SORT
+    robusto para no contar dos veces al mismo animal. NO estima peso:
+    los MP4 del DJI no traen RelativeAltitude, así que no hay escala.
+
+    Args:
+        video_path: MP4/MOV del drone.
+        modelo: peso YOLO (p.ej. yolov8l-seg.pt) — el del sidebar.
+        conf: confianza mínima — la del sidebar.
+        stride: procesar 1 de cada `stride` frames (1 = todos, como el
+            pipeline viejo; 3 recomendado).
+        out_dir: carpeta donde dejar video anotado y frames de muestra.
+        progress_cb: callable(frac 0..1, conteo_parcial) para la barra.
+        generar_video: si False, solo guarda 4 frames anotados (rápido).
+
+    Returns:
+        ResultadoVideo con el conteo de tracks confirmados renumerados.
+    """
+    import cv2
+
+    from .detector import CattleDetector
+
+    video_path = Path(video_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stride = max(1, int(stride))
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"No pude abrir el video: {video_path}")
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    model_path = str(repo_root / modelo) if (repo_root / modelo).exists() else modelo
+    detector = CattleDetector(model_path=model_path, conf=conf,
+                              iou=0.5, imgsz=imgsz)
+    tracker_yaml = repo_root / TRACKER_VIDEO
+    tracker = str(tracker_yaml) if tracker_yaml.exists() else "bytetrack.yaml"
+
+    # Salida anotada: bajamos a <=1920 de ancho para que el archivo sea
+    # liviano y el encodeo no domine el tiempo de procesamiento.
+    escala = min(1.0, 1920.0 / w) if w else 1.0
+    out_w, out_h = (int(w * escala) // 2 * 2, int(h * escala) // 2 * 2)
+    writer = None
+    codec = ""
+    video_out = out_dir / f"{video_path.stem}_conteo.mp4"
+    if generar_video:
+        fps_out = max(5.0, min(30.0, fps / stride))
+        writer = cv2.VideoWriter(str(video_out),
+                                 cv2.VideoWriter_fourcc(*"avc1"),
+                                 fps_out, (out_w, out_h))
+        codec = "avc1"
+        if not writer.isOpened():
+            writer = cv2.VideoWriter(str(video_out),
+                                     cv2.VideoWriter_fourcc(*"mp4v"),
+                                     fps_out, (out_w, out_h))
+            codec = "mp4v"
+        if not writer.isOpened():
+            writer = None
+            codec = ""
+
+    # 4 frames de muestra repartidos a lo largo del video
+    est_procesados = max(1, n_total // stride) if n_total else 0
+    objetivos_muestra = ({int(est_procesados * f)
+                          for f in (0.15, 0.40, 0.65, 0.90)}
+                         if est_procesados else set())
+    frames_muestra: List[Path] = []
+
+    vistos: dict = {}        # track_id -> cantidad de frames procesados
+    frame_idx = 0
+    procesados = 0
+    try:
+        while True:
+            if stride > 1 and (frame_idx % stride) != 0:
+                if not cap.grab():      # saltear sin decodificar
+                    break
+                frame_idx += 1
+                continue
+            ok, frame = cap.read()
+            if not ok:
+                break
+
+            dets = detector.track(frame, tracker=tracker, persist=True)
+            for d in dets:
+                if d.track_id is None:
+                    continue
+                vistos[d.track_id] = vistos.get(d.track_id, 0) + 1
+            n_conf = sum(1 for v in vistos.values() if v >= min_frames)
+
+            necesita_anotado = (writer is not None
+                                or procesados in objetivos_muestra)
+            if necesita_anotado:
+                anotado = _anotar_frame_video(frame, dets, n_conf)
+                if escala < 1.0:
+                    anotado = cv2.resize(anotado, (out_w, out_h))
+                if writer is not None:
+                    writer.write(anotado)
+                if procesados in objetivos_muestra and dets:
+                    p_jpg = out_dir / f"{video_path.stem}_f{frame_idx:06d}.jpg"
+                    cv2.imwrite(str(p_jpg), anotado,
+                                [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    frames_muestra.append(p_jpg)
+
+            procesados += 1
+            frame_idx += 1
+            if progress_cb and n_total:
+                progress_cb(min(1.0, frame_idx / n_total), n_conf)
+    finally:
+        cap.release()
+        if writer is not None:
+            writer.release()
+
+    # Confirmados con >= min_frames (igual que process_video) y
+    # renumerados 1..N — el conteo final es len(confirmados).
+    confirmados = sorted(tid for tid, v in vistos.items() if v >= min_frames)
+
+    return ResultadoVideo(
+        n_animales=len(confirmados),
+        n_tracks_totales=len(vistos),
+        n_frames_video=n_total or frame_idx,
+        n_frames_procesados=procesados,
+        fps=fps,
+        duracion_s=(frame_idx / fps) if fps else 0.0,
+        stride=stride,
+        min_frames=min_frames,
+        video_anotado=(video_out if (generar_video and writer is not None
+                                     and video_out.exists()) else None),
+        codec=codec,
+        frames_muestra=frames_muestra,
+    )
