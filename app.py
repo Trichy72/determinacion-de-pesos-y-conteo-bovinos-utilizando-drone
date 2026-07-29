@@ -17,17 +17,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# cv2 / OpenCV solo se usa para la pestaña de drone (conteo por video).
-# En Streamlit Cloud NO lo instalamos para no pasarnos del límite de RAM.
-# Si el import falla, deshabilitamos la pestaña drone pero el resto de la
-# app (nutrición, dietas, alertas, clientes) sigue funcionando.
-try:
-    import cv2  # noqa: F401
-    _DRONE_LIBS_OK = True
-except Exception as _e_cv2:
-    cv2 = None  # placeholder para que las referencias no rompan al parsear
-    _DRONE_LIBS_OK = False
-
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -168,41 +157,9 @@ def armar_nombre_pdf(
     partes = [p for p in partes if p]
     return "_".join(partes) + ".pdf"
 
-# Módulos que dependen de cv2/ultralytics — solo importables si _DRONE_LIBS_OK.
-# En Streamlit Cloud estos NO se instalan (ver requirements-cloud.txt) y la
-# pestaña drone queda deshabilitada. En local funciona normal.
-#
-# Cuando NO están disponibles, en vez de None usamos "stubs" — clases y
-# funciones que aceptan cualquier argumento y devuelven None. Así, todo
-# código que hace `WeightModel.from_config(...)` o `CattleDetector(...)`
-# devuelve None en lugar de tirar AttributeError/TypeError.
-class _DroneStub:
-    """Clase dummy que devuelve None para cualquier método/atributo/llamada."""
-    def __init__(self, *args, **kwargs):
-        pass
-    def __call__(self, *args, **kwargs):
-        return None
-    def __getattr__(self, name):
-        return _DroneStub()
-
-def _drone_stub_fn(*args, **kwargs):
-    """Función dummy que siempre devuelve None."""
-    return None
-
-if _DRONE_LIBS_OK:
-    try:
-        from src.detector import CattleDetector
-        from src.processor import process_video
-        from src.weight_estimator import WeightModel
-    except Exception:
-        _DRONE_LIBS_OK = False
-        CattleDetector = _DroneStub
-        process_video = _drone_stub_fn
-        WeightModel = _DroneStub
-else:
-    CattleDetector = _DroneStub
-    process_video = _drone_stub_fn
-    WeightModel = _DroneStub
+# El procesamiento de imágenes del drone (YOLO, OpenCV) vive en la app
+# local de la Mac: drone_app.py. Esta app es solo de gestión y consulta:
+# las pesadas que genera el drone llegan por la base de datos compartida.
 from src.nutritional_analysis import (
     analizar_uniformidad, calcular_requerimientos, proyectar_peso,
     ajustar_req_por_dmi,
@@ -1695,24 +1652,6 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-@st.cache_resource(show_spinner="Cargando modelo YOLO…")
-def load_detector(model_path: str, cow_class_id: int, conf: float, iou: float,
-                  imgsz: int, modo_tropa_densa: bool = False):
-    # En Streamlit Cloud (lite) no está CattleDetector porque cv2/YOLO
-    # no se instalan. Devolvemos None y las pestañas del drone quedan
-    # deshabilitadas con un mensaje.
-    if not _DRONE_LIBS_OK or CattleDetector is None:
-        return None
-    return CattleDetector(
-        model_path=model_path,
-        cow_class_id=cow_class_id,
-        conf=conf,
-        iou=iou,
-        imgsz=imgsz,
-        modo_tropa_densa=modo_tropa_densa,
-    )
-
-
 cfg = load_config()
 
 # ---------------------------------------------------------------------
@@ -1874,38 +1813,6 @@ with st.sidebar:
 
     # Versión "estable" para uso en otros tabs
     st.session_state["anthropic_api_key"] = api_key
-
-# ---------------------------------------------------------------------
-# Carga de modelo
-# ---------------------------------------------------------------------
-# La UI de parámetros del drone se movió a la app local de la Mac
-# (drone_app.py). La pestaña Evolución todavía invoca el pipeline de
-# video, así que dejamos valores por defecto (en Streamlit Cloud el
-# detector es None y el pipeline queda deshabilitado, igual que antes).
-modo_tropa_densa = False
-modelo_path = "yolov8m.pt"
-conf = 0.10
-iou = float(cfg["deteccion"]["iou_threshold"])
-imgsz = 1280
-raza = "angus"
-categoria = "vaquillona"
-ajuste_fino = 1.00
-weight_json = None
-
-detector = load_detector(
-    modelo_path, cfg["deteccion"]["clase_cow_id"], conf, iou, imgsz,
-    modo_tropa_densa=modo_tropa_densa,
-)
-
-if not _DRONE_LIBS_OK or WeightModel is None:
-    # Modo lite (Streamlit Cloud): sin YOLO no hay estimación de peso.
-    # Las pestañas del drone van a mostrar mensaje de "no disponible".
-    weight_model = None
-elif weight_json:
-    import json
-    weight_model = WeightModel(**json.loads(weight_json))
-else:
-    weight_model = WeightModel.from_config(cfg)
 
 # ---------------------------------------------------------------------
 # Tabs
@@ -12716,390 +12623,300 @@ with tab_clientes:
 # --------------------------- EVOLUCIÓN --------------------------------
 with tab_evo:
     st.markdown(
-        "### 📈 Comparación entre dos fechas (ADG y eficiencia)\n"
-        "Subí dos videos del mismo lote tomados en distintas fechas para "
-        "calcular **ganancia diaria de peso (ADG)**, el indicador clave para "
-        "evaluar la respuesta a una dieta."
+        "### Evolución del lote (ADG y eficiencia)\n"
+        "La **ganancia diaria de peso (ADG)** es el indicador que muestra si la "
+        "dieta está funcionando. Se calcula con las pesadas guardadas en la "
+        "ficha del lote: las que carga el drone desde la Mac, las de balanza, "
+        "o las que ingresás a mano."
     )
 
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-        st.subheader("📅 Pesada inicial")
-        fecha_ini = st.date_input("Fecha", key="evo_fecha_ini")
-        file_ini = st.file_uploader(
-            "Video pesada inicial",
-            type=["mp4", "mov", "avi"],
-            key="evo_vid_ini",
+    _lotes_evo = db.listar_lotes()
+    if not _lotes_evo:
+        st.info(
+            "Todavía no hay lotes cargados. Creá un cliente y un lote en la "
+            "pestaña **Clientes y lotes** para empezar a seguir su evolución."
         )
-        kg_ms_dia_ini = st.number_input(
-            "kg materia seca / animal / día (dieta inicial)",
-            min_value=0.0, max_value=20.0, value=8.0, step=0.1,
-            key="evo_kgms_ini",
-            help="Para calcular conversión alimenticia",
-        )
-
-    with col_b:
-        st.subheader("📅 Pesada final")
-        fecha_fin = st.date_input("Fecha", key="evo_fecha_fin")
-        file_fin = st.file_uploader(
-            "Video pesada final",
-            type=["mp4", "mov", "avi"],
-            key="evo_vid_fin",
-        )
-        kg_ms_dia_fin = st.number_input(
-            "kg materia seca / animal / día (dieta final)",
-            min_value=0.0, max_value=20.0, value=8.0, step=0.1,
-            key="evo_kgms_fin",
+    else:
+        _lote_evo_id = st.selectbox(
+            "Lote",
+            [l["id"] for l in _lotes_evo],
+            format_func=lambda x: next(
+                f"{l['cliente_nombre']} — {l['identificador']}"
+                for l in _lotes_evo if l["id"] == x),
+            key="evo_lote_sel",
         )
 
-    st.divider()
+        _pesadas = db.listar_pesadas(_lote_evo_id)
+        _lote_evo = db.obtener_lote(_lote_evo_id)
 
-    if file_ini and file_fin:
-        if fecha_fin <= fecha_ini:
-            st.error("La fecha final debe ser posterior a la inicial.")
+        if len(_pesadas) < 2:
+            st.warning(
+                f"Este lote tiene **{len(_pesadas)} pesada"
+                f"{'s' if len(_pesadas) != 1 else ''}**. Para calcular ADG "
+                "hacen falta al menos dos, en fechas distintas."
+            )
+            st.markdown(
+                "**Cómo sumar una pesada:**\n"
+                "- **Con el drone:** procesás la recorrida en la app local de "
+                "la Mac (HMS Drone) y la guardás en la ficha de este lote. "
+                "Aparece acá automáticamente.\n"
+                "- **Con balanza:** la cargás a mano en la ficha del lote, en "
+                "la pestaña **Clientes y lotes**."
+            )
         else:
-            dias = (fecha_fin - fecha_ini).days
+            _evo = db.calcular_evolucion_lote(_lote_evo_id)
+            _pri, _ult = _evo["primera_pesada"], _evo["ultima_pesada"]
 
-            # Procesar ambos videos (con cache por hash)
-            results = {}
-            for label, file_obj in [("ini", file_ini), ("fin", file_fin)]:
-                bytes_data = file_obj.getvalue()
-                cache_key = _hash_bytes(
-                    bytes_data, modelo_path, conf, iou, imgsz, raza, categoria,
-                    ajuste_fino, cfg["referencia"]["metodo"], cfg["referencia"]["lado_m"],
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Pesadas", _evo["n_pesadas"])
+            c2.metric("Período", f"{_evo['dias_totales']} días",
+                      help=f"{_pri['fecha']} → {_ult['fecha']}")
+            c3.metric("Ganancia", f"{_evo['ganancia_total_kg']:+.1f} kg",
+                      help="Por animal, entre la primera y la última pesada")
+            c4.metric("ADG", f"{_evo['adg_total']:+.3f} kg/día",
+                      help="Ganancia diaria de peso promedio del período")
+
+            st.divider()
+
+            # Conversión alimenticia: kg de materia seca por kg ganado
+            _kg_ms = st.number_input(
+                "kg de materia seca / animal / día (promedio del período)",
+                min_value=0.0, max_value=25.0, value=0.0, step=0.1,
+                key="evo_kgms",
+                help="Dejalo en 0 si no lo sabés. Con este dato se calcula la "
+                     "conversión alimenticia (kg de MS por cada kg ganado).",
+            )
+            if _kg_ms > 0 and _evo["adg_total"] > 0:
+                _conv = _kg_ms / _evo["adg_total"]
+                st.metric("Conversión alimenticia", f"{_conv:.2f}",
+                          help="kg de materia seca consumida por cada kg de "
+                               "peso vivo ganado. Más bajo es mejor.")
+            elif _kg_ms > 0:
+                st.warning(
+                    "La conversión alimenticia no se puede calcular con ADG "
+                    "cero o negativo: el lote no ganó peso en el período."
                 )
-                ck_state = f"evo_{label}_cache_key"
-                if st.session_state.get(ck_state) != cache_key:
-                    with tempfile.NamedTemporaryFile(
-                        suffix=Path(file_obj.name).suffix, delete=False
-                    ) as tmp:
-                        tmp.write(bytes_data)
-                        in_p = Path(tmp.name)
-                    out_p = in_p.with_name(in_p.stem + f"_evo_{label}.mp4")
 
-                    pbar = st.progress(0.0, text=f"Procesando {label}…")
-                    def cb_evo(p, _l=label, _pb=pbar):
-                        _pb.progress(min(p, 1.0), text=f"Procesando {_l}… {p*100:.0f}%")
+            # Uniformidad: el CV dice si el lote se abre o se cierra
+            _cv_pri = _pri.get("cv_pct")
+            _cv_ult = _ult.get("cv_pct")
+            if _cv_pri is not None and _cv_ult is not None:
+                _dif_cv = _cv_ult - _cv_pri
+                _txt = ("el lote se hizo **más parejo**" if _dif_cv < -1 else
+                        "el lote se **desparejó**" if _dif_cv > 1 else
+                        "la uniformidad se mantuvo")
+                st.markdown(
+                    f"**Uniformidad:** CV {_cv_pri:.1f}% → {_cv_ult:.1f}% "
+                    f"({_dif_cv:+.1f} puntos) — {_txt}. Un lote que se "
+                    "despareja suele indicar competencia por comedero o "
+                    "animales que quedan atrás."
+                )
 
-                    with st.spinner(f"Procesando video {label}…"):
-                        r = process_video(
-                            in_p, out_p, detector, weight_model, cfg,
-                            raza=raza, categoria=categoria,
-                            ajuste_fino=ajuste_fino, progress_cb=cb_evo,
-                        )
-                    pbar.progress(1.0, text=f"{label} listo")
-                    pesos = [a.peso_kg for a in r.animales]
-                    st.session_state[ck_state] = cache_key
-                    st.session_state[f"evo_{label}_n"] = r.n_animales
-                    st.session_state[f"evo_{label}_prom"] = r.peso_promedio_kg
-                    st.session_state[f"evo_{label}_desv"] = r.desvio_kg
-                    st.session_state[f"evo_{label}_total"] = r.peso_total_kg
-                    st.session_state[f"evo_{label}_pesos"] = pesos
+            st.divider()
+            st.markdown("#### Pesada por pesada")
+            _filas = []
+            for _p in _pesadas:
+                _filas.append({
+                    "Fecha": _p["fecha"],
+                    "Método": (_p.get("metodo") or "—"),
+                    "Animales": _p.get("cantidad_animales"),
+                    "Peso prom. (kg)": (
+                        round(_p["peso_promedio_kg"], 1)
+                        if _p.get("peso_promedio_kg") else None),
+                    "CV (%)": (round(_p["cv_pct"], 1)
+                               if _p.get("cv_pct") else None),
+                })
+            st.dataframe(pd.DataFrame(_filas), width="stretch",
+                         hide_index=True)
 
-                results[label] = {
-                    "n": st.session_state[f"evo_{label}_n"],
-                    "prom": st.session_state[f"evo_{label}_prom"],
-                    "desv": st.session_state[f"evo_{label}_desv"],
-                    "total": st.session_state[f"evo_{label}_total"],
-                    "pesos": st.session_state[f"evo_{label}_pesos"],
-                }
+            if _evo["tendencia"]:
+                st.markdown("#### ADG entre pesadas consecutivas")
+                st.dataframe(pd.DataFrame([{
+                    "Desde": _t["desde"], "Hasta": _t["hasta"],
+                    "Días": _t["dias"],
+                    "Ganancia (kg)": round(_t["ganancia_kg"], 1),
+                    "ADG (kg/día)": round(_t["adg"], 3),
+                } for _t in _evo["tendencia"]]),
+                    width="stretch", hide_index=True)
 
-            r_ini = results["ini"]
-            r_fin = results["fin"]
-            ganancia_total_kg = r_fin["prom"] - r_ini["prom"]
-            adg = ganancia_total_kg / dias if dias else 0
-            kg_ms_total_dia = (kg_ms_dia_ini + kg_ms_dia_fin) / 2
-            conv_alim = kg_ms_total_dia / adg if adg > 0 else float("inf")
-            cv_ini = (r_ini["desv"] / r_ini["prom"] * 100) if r_ini["prom"] else 0
-            cv_fin = (r_fin["desv"] / r_fin["prom"] * 100) if r_fin["prom"] else 0
-
-            st.markdown(f"### 📊 Resumen del período ({dias} días)")
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric(
-                "ADG (kg/día)", f"{adg:+.3f}",
-                "🟢 Bueno" if adg > 0.8 else "🟡 Bajo" if adg > 0.3 else "🔴 Crítico",
-            )
-            m2.metric("Ganancia total", f"{ganancia_total_kg:+.1f} kg")
-            m3.metric(
-                "Conversión alim.", f"{conv_alim:.1f}",
-                help="kg MS consumida / kg ganado. Vaquillonas óptimo 6-8.",
-            )
-            m4.metric(
-                "Cambio CV", f"{cv_fin - cv_ini:+.1f} pp",
-                help="Variabilidad del lote. Bajar = lote más uniforme",
-            )
-
-            st.markdown("### Comparativa de pesadas")
-            comp = pd.DataFrame({
-                "Indicador": [
-                    "Cantidad de animales", "Peso promedio (kg)",
-                    "Peso total del lote (kg)", "Desvío estándar (kg)",
-                    "Coef. variación (%)", "Más liviano (kg)", "Más pesado (kg)",
-                ],
-                f"Inicial ({fecha_ini})": [
-                    r_ini["n"], f"{r_ini['prom']:.1f}", f"{r_ini['total']:.0f}",
-                    f"{r_ini['desv']:.1f}", f"{cv_ini:.1f}",
-                    f"{min(r_ini['pesos']):.1f}" if r_ini["pesos"] else "—",
-                    f"{max(r_ini['pesos']):.1f}" if r_ini["pesos"] else "—",
-                ],
-                f"Final ({fecha_fin})": [
-                    r_fin["n"], f"{r_fin['prom']:.1f}", f"{r_fin['total']:.0f}",
-                    f"{r_fin['desv']:.1f}", f"{cv_fin:.1f}",
-                    f"{min(r_fin['pesos']):.1f}" if r_fin["pesos"] else "—",
-                    f"{max(r_fin['pesos']):.1f}" if r_fin["pesos"] else "—",
-                ],
-            })
-            st.dataframe(comp, hide_index=True, width="stretch")
-
-            # Histograma comparado
-            st.markdown("### Distribución de pesos")
+            # Curva de peso
             try:
-                import matplotlib.pyplot as plt
-                fig, ax = plt.subplots(figsize=(8, 4))
-                ax.hist(r_ini["pesos"], bins=10, alpha=0.6, label=f"Inicial ({fecha_ini})", color="#1f77b4")
-                ax.hist(r_fin["pesos"], bins=10, alpha=0.6, label=f"Final ({fecha_fin})", color="#2ca02c")
-                ax.axvline(r_ini["prom"], color="#1f77b4", linestyle="--", linewidth=2)
-                ax.axvline(r_fin["prom"], color="#2ca02c", linestyle="--", linewidth=2)
-                ax.set_xlabel("Peso (kg)")
-                ax.set_ylabel("Cantidad de animales")
-                ax.legend()
-                ax.grid(alpha=0.3)
-                st.pyplot(fig)
-            except Exception as e:
-                st.warning(f"No pude graficar: {e}")
+                _serie = pd.DataFrame([
+                    {"Fecha": pd.to_datetime(_p["fecha"]),
+                     "Peso promedio (kg)": _p["peso_promedio_kg"]}
+                    for _p in _pesadas if _p.get("peso_promedio_kg")
+                ]).set_index("Fecha")
+                if len(_serie) >= 2:
+                    st.line_chart(_serie)
+            except Exception as _e_graf:
+                st.caption(f"No pude graficar la curva: {_e_graf}")
 
             # Reporte exportable
-            reporte = (
-                f"REPORTE DE EVOLUCIÓN DEL LOTE\n"
-                f"================================\n\n"
-                f"Período: {fecha_ini} → {fecha_fin}  ({dias} días)\n"
-                f"Raza: {raza}   Categoría: {categoria}\n\n"
-                f"PESADA INICIAL ({fecha_ini})\n"
-                f"  Animales: {r_ini['n']}\n"
-                f"  Peso promedio: {r_ini['prom']:.1f} kg\n"
-                f"  Peso total: {r_ini['total']:.0f} kg\n"
-                f"  Desvío estándar: {r_ini['desv']:.1f} kg (CV {cv_ini:.1f}%)\n\n"
-                f"PESADA FINAL ({fecha_fin})\n"
-                f"  Animales: {r_fin['n']}\n"
-                f"  Peso promedio: {r_fin['prom']:.1f} kg\n"
-                f"  Peso total: {r_fin['total']:.0f} kg\n"
-                f"  Desvío estándar: {r_fin['desv']:.1f} kg (CV {cv_fin:.1f}%)\n\n"
-                f"INDICADORES NUTRICIONALES\n"
-                f"  Ganancia total: {ganancia_total_kg:+.1f} kg/animal\n"
-                f"  ADG: {adg:+.3f} kg/día\n"
-                f"  kg MS/día prom.: {kg_ms_total_dia:.1f}\n"
-                f"  Conversión alimenticia: {conv_alim:.2f} (kg MS / kg ganado)\n"
-                f"  Cambio en CV: {cv_fin - cv_ini:+.1f} pp\n"
+            _rep = (
+                f"EVOLUCIÓN DEL LOTE\n"
+                f"==================\n\n"
+                f"Cliente: {_lote_evo.get('cliente_nombre', '—')}\n"
+                f"Lote: {_lote_evo.get('identificador', '—')}\n"
+                f"Categoría: {_lote_evo.get('categoria', '—')}\n\n"
+                f"Período: {_pri['fecha']} → {_ult['fecha']} "
+                f"({_evo['dias_totales']} días)\n"
+                f"Pesadas registradas: {_evo['n_pesadas']}\n\n"
+                f"PRIMERA PESADA ({_pri['fecha']}, {_pri.get('metodo') or '—'})\n"
+                f"  Animales: {_pri.get('cantidad_animales')}\n"
+                f"  Peso promedio: {_pri.get('peso_promedio_kg')} kg\n\n"
+                f"ÚLTIMA PESADA ({_ult['fecha']}, {_ult.get('metodo') or '—'})\n"
+                f"  Animales: {_ult.get('cantidad_animales')}\n"
+                f"  Peso promedio: {_ult.get('peso_promedio_kg')} kg\n\n"
+                f"INDICADORES\n"
+                f"  Ganancia total: {_evo['ganancia_total_kg']:+.1f} kg/animal\n"
+                f"  ADG: {_evo['adg_total']:+.3f} kg/día\n"
             )
+            if _kg_ms > 0 and _evo["adg_total"] > 0:
+                _rep += (f"  kg MS/animal/día: {_kg_ms:.1f}\n"
+                         f"  Conversión alimenticia: "
+                         f"{_kg_ms / _evo['adg_total']:.2f}\n")
             st.download_button(
-                "📥 Descargar reporte (TXT)",
-                data=reporte.encode("utf-8"),
-                file_name=f"reporte_evolucion_{fecha_ini}_{fecha_fin}.txt",
+                "Descargar reporte (TXT)",
+                data=_rep.encode("utf-8"),
+                file_name=(f"evolucion_{_lote_evo.get('identificador', 'lote')}"
+                           f"_{_pri['fecha']}_{_ult['fecha']}.txt"),
                 mime="text/plain",
                 key="dl_reporte_evo",
             )
 
+
 # ----------------------- ANÁLISIS AVANZADO ----------------------------
 with tab_avanzado:
     st.markdown(
-        "### 🔬 Análisis estadístico y diagnóstico del lote\n"
-        "Esta pestaña usa el último video procesado con el módulo drone "
-        "(app local de la Mac). Muestra percentiles, identifica outliers "
-        "y diagnostica uniformidad."
+        "### Análisis estadístico del lote\n"
+        "Toma una pesada con **pesos individuales** (las que genera el drone "
+        "guardan el peso de cada animal) y analiza la uniformidad: "
+        "percentiles, animales que quedaron atrás y diagnóstico."
     )
 
-    if "vid_animales" not in st.session_state or not st.session_state.get("vid_animales"):
-        st.info(
-            "No hay resultados de video en esta sesión. El procesamiento "
-            "de drone (imagen/video) se hace en la app local de la Mac; "
-            "las pesadas guardadas se consultan en la pestaña 📚 Historial."
-        )
+    _lotes_an = db.listar_lotes()
+    if not _lotes_an:
+        st.info("Todavía no hay lotes cargados.")
     else:
-        animales_dict = [
-            {"track_id": a["Animal"], "peso_kg": a["Peso (kg)"]}
-            for a in st.session_state["vid_animales"]
-        ]
-        unif = analizar_uniformidad(animales_dict)
-
-        # Cards principales
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Animales", unif.n)
-        c2.metric("Promedio", f"{unif.promedio_kg:.1f} kg")
-        c3.metric("Mediana", f"{unif.mediana_kg:.1f} kg")
-        c4.metric("CV", f"{unif.cv_pct:.1f}%",
-                  "🟢" if unif.cv_pct < 12 else "🟡" if unif.cv_pct < 18 else "🔴")
-
-        st.markdown(f"#### {unif.diagnostico}")
-        st.info(f"💡 {unif.recomendacion}")
-
-        # Tabla de percentiles
-        st.markdown("#### Distribución por percentiles")
-        perc_df = pd.DataFrame({
-            "Percentil": ["Mínimo", "P10 (cabeza-baja)", "P25", "Mediana (P50)",
-                          "P75", "P90 (cabeza-alta)", "Máximo"],
-            "Peso (kg)": [
-                f"{unif.min_kg:.1f}", f"{unif.p10_kg:.1f}",
-                f"{unif.p25_kg:.1f}", f"{unif.mediana_kg:.1f}",
-                f"{unif.p75_kg:.1f}", f"{unif.p90_kg:.1f}",
-                f"{unif.max_kg:.1f}",
-            ],
-        })
-        st.dataframe(perc_df, hide_index=True, width="stretch")
-
-        # Histograma + boxplot
-        st.markdown("#### Distribución gráfica")
-        try:
-            import matplotlib.pyplot as plt
-            pesos = [a["peso_kg"] for a in animales_dict]
-            fig, axes = plt.subplots(1, 2, figsize=(10, 4),
-                                      gridspec_kw={"width_ratios": [3, 1]})
-            axes[0].hist(pesos, bins=12, color="#97bc62", edgecolor="#2c5f2d")
-            axes[0].axvline(unif.promedio_kg, color="#2c5f2d", linestyle="--",
-                            label=f"Promedio {unif.promedio_kg:.0f}")
-            axes[0].axvline(unif.mediana_kg, color="#cc3300", linestyle=":",
-                            label=f"Mediana {unif.mediana_kg:.0f}")
-            axes[0].set_xlabel("Peso (kg)")
-            axes[0].set_ylabel("Cantidad")
-            axes[0].legend()
-            axes[0].grid(alpha=0.3)
-            axes[1].boxplot(pesos, patch_artist=True,
-                            boxprops=dict(facecolor="#97bc62"))
-            axes[1].set_ylabel("Peso (kg)")
-            axes[1].grid(alpha=0.3)
-            st.pyplot(fig)
-        except Exception as e:
-            st.warning(f"Gráfico no disponible: {e}")
-
-        # Outliers
-        if unif.outliers_low or unif.outliers_high:
-            st.markdown("#### ⚠️ Animales fuera del rango uniforme")
-            col_low, col_high = st.columns(2)
-            with col_low:
-                if unif.outliers_low:
-                    st.markdown(f"**Cabeza-baja** ({len(unif.outliers_low)}):")
-                    st.write(unif.outliers_low)
-                else:
-                    st.markdown("**Cabeza-baja**: ninguno ✅")
-            with col_high:
-                if unif.outliers_high:
-                    st.markdown(f"**Cabeza-alta** ({len(unif.outliers_high)}):")
-                    st.write(unif.outliers_high)
-                else:
-                    st.markdown("**Cabeza-alta**: ninguno ✅")
-
-        # Proyección a futuro (sin ADG real, asume objetivo)
-        st.divider()
-        st.markdown("### 📅 Proyección a fecha futura")
-        col_p1, col_p2, col_p3 = st.columns(3)
-        with col_p1:
-            adg_estimado = st.number_input(
-                "ADG estimado (kg/día)", min_value=0.0, max_value=2.5,
-                value=1.0, step=0.05, key="proj_adg",
-                help="Si ya hiciste pesada anterior, usá el de la pestaña 📈 Evolución",
-            )
-        with col_p2:
-            dias_proyeccion = st.number_input(
-                "Proyectar a (días)", min_value=7, max_value=365,
-                value=60, step=1, key="proj_dias",
-            )
-        with col_p3:
-            objetivo_kg = st.number_input(
-                "Peso objetivo (kg, opcional)", min_value=0.0, max_value=1200.0,
-                value=400.0, step=5.0, key="proj_obj",
-            )
-
-        proj = proyectar_peso(
-            unif.promedio_kg, adg_estimado, dias_proyeccion,
-            peso_objetivo_kg=objetivo_kg if objetivo_kg > 0 else None,
+        _lote_an_id = st.selectbox(
+            "Lote",
+            [l["id"] for l in _lotes_an],
+            format_func=lambda x: next(
+                f"{l['cliente_nombre']} — {l['identificador']}"
+                for l in _lotes_an if l["id"] == x),
+            key="an_lote_sel",
         )
-        cp1, cp2, cp3 = st.columns(3)
-        cp1.metric("Peso a la fecha", f"{proj.peso_proyectado_kg:.1f} kg",
-                   f"+{proj.peso_proyectado_kg - unif.promedio_kg:.0f} kg")
-        cp2.metric("Rango estimado",
-                   f"{proj.intervalo_confianza[0]:.0f}–{proj.intervalo_confianza[1]:.0f} kg")
-        if proj.cumple_objetivo is not None:
-            if proj.cumple_objetivo:
-                cp3.metric("Cumple objetivo", "✅ SÍ", f"+{proj.diferencia_objetivo_kg:.0f} kg")
-            else:
-                cp3.metric("Cumple objetivo", "⚠️ NO",
-                           f"Falta {-proj.diferencia_objetivo_kg:.0f} kg")
-                st.warning(
-                    f"Para llegar a {objetivo_kg:.0f} kg en {dias_proyeccion} días "
-                    f"necesitás ADG de **{proj.adg_requerido_para_objetivo:.3f} kg/día** "
-                    f"(actual: {adg_estimado:.3f}). Ajustar dieta."
-                )
 
-        # Guardar la proyección y uniformidad para el PDF
-        st.session_state["last_uniformidad"] = unif
-        st.session_state["last_proyeccion"] = proj
-
-        # ---- BOTÓN PDF ----
-        st.divider()
-        st.markdown("### 📄 Generar reporte PDF profesional")
-        col_h1, col_h2 = st.columns(2)
-        with col_h1:
-            cliente_pdf = st.text_input(
-                "Cliente",
-                key="pdf_cliente_analisis",
-                placeholder="Ej: Ezequiel Pezzola",
-            )
-            establecimiento = st.text_input(
-                "Establecimiento", key="pdf_estab",
-            )
-            asesor = st.text_input(
-                "Asesor / Técnico",
-                value="Mauricio Suárez — Asesor Técnico Nutricional",
-                key="pdf_asesor",
-            )
-        with col_h2:
-            lote = st.text_input("Identificación del lote", key="pdf_lote")
-            objetivo_pdf = st.text_input(
-                "Objetivo productivo",
-                key="pdf_objetivo_analisis",
-                placeholder="Ej: ADG 0.8 kg/día — Terminación",
-            )
-            notas_pdf = st.text_area(
-                "Notas adicionales", key="pdf_notas", height=80,
-            )
-
-        if st.button("📄 Generar PDF", type="primary"):
+        # Solo sirven las pesadas que guardaron el peso de cada animal.
+        # Ojo: una pesada sin pesos individuales guarda "[]", que no es
+        # vacío como string pero sí como lista.
+        def _pesos_de(_p) -> list:
+            _raw = _p.get("pesos_individuales_json")
+            if not _raw:
+                return []
             try:
-                _nombre_pdf = armar_nombre_pdf(
-                    cliente=cliente_pdf,
-                    categoria=categoria,
-                    objetivo=objetivo_pdf,
-                    lote=lote,
-                    sufijo="reporte",
-                )
-                pdf_path = Path(tempfile.mkdtemp()) / _nombre_pdf
-                generar_pdf(
-                    pdf_path,
-                    establecimiento=establecimiento, asesor=asesor, lote=lote,
-                    raza=raza, categoria=categoria,
-                    n_animales=unif.n,
-                    peso_promedio_kg=unif.promedio_kg,
-                    peso_total_kg=unif.promedio_kg * unif.n,
-                    desvio_kg=unif.desvio_kg,
-                    animales=animales_dict,
-                    uniformidad=unif,
-                    proyeccion=proj if objetivo_kg > 0 or adg_estimado > 0 else None,
-                    calidad_pct=st.session_state.get("vid_calidad_pct", 100),
-                    notas_extra=notas_pdf,
-                )
-                with open(pdf_path, "rb") as f:
-                    st.download_button(
-                        "⬇️ Descargar PDF",
-                        data=f.read(),
-                        file_name=_nombre_pdf,
-                        mime="application/pdf",
-                        key="dl_pdf_avanzado",
-                    )
-                st.success("✅ PDF generado")
-            except Exception as e:
-                st.error(f"Error generando PDF: {e}")
-                st.exception(e)
+                import json as _js
+                _v = _js.loads(_raw)
+                if isinstance(_v, str):      # por si quedó doble serializado
+                    _v = _js.loads(_v)
+                return [float(_x) for _x in _v] if isinstance(_v, list) else []
+            except Exception:
+                return []
 
+        _pesadas_an = [_p for _p in db.listar_pesadas(_lote_an_id)
+                       if len(_pesos_de(_p)) >= 3]
+
+        if not _pesadas_an:
+            st.info(
+                "Este lote no tiene pesadas con pesos individuales. Una "
+                "pesada de balanza guarda solo el promedio; las que procesa "
+                "el drone en la app local de la Mac guardan el peso de cada "
+                "animal, y son las que permiten este análisis."
+            )
+        else:
+            _pes_sel = st.selectbox(
+                "Pesada",
+                list(range(len(_pesadas_an))),
+                format_func=lambda k: (
+                    f"{_pesadas_an[k]['fecha']} — "
+                    f"{_pesadas_an[k].get('cantidad_animales') or '?'} animales "
+                    f"({_pesadas_an[k].get('metodo') or 'sin método'})"),
+                index=len(_pesadas_an) - 1,
+                key="an_pesada_sel",
+            )
+            _pesada = _pesadas_an[_pes_sel]
+
+            _animales_an = [
+                {"track_id": _k + 1, "peso_kg": _v}
+                for _k, _v in enumerate(_pesos_de(_pesada))
+            ]
+
+            if len(_animales_an) < 3:
+                st.warning(
+                    "Hacen falta al menos 3 animales para que el análisis de "
+                    "uniformidad tenga sentido."
+                )
+            else:
+                _unif = analizar_uniformidad(_animales_an)
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Animales", _unif.n)
+                c2.metric("Peso promedio", f"{_unif.promedio_kg:.1f} kg")
+                c3.metric("Desvío", f"{_unif.desvio_kg:.1f} kg")
+                c4.metric("CV", f"{_unif.cv_pct:.1f} %",
+                          help="Coeficiente de variación: cuánto se dispersan "
+                               "los pesos. Menos de 10 % es un lote parejo.")
+
+                st.markdown("#### Percentiles")
+                st.dataframe(pd.DataFrame({
+                    "Percentil": ["Mínimo", "P10", "P25", "Mediana",
+                                  "P75", "P90", "Máximo"],
+                    "Peso (kg)": [
+                        f"{_unif.min_kg:.1f}", f"{_unif.p10_kg:.1f}",
+                        f"{_unif.p25_kg:.1f}", f"{_unif.mediana_kg:.1f}",
+                        f"{_unif.p75_kg:.1f}", f"{_unif.p90_kg:.1f}",
+                        f"{_unif.max_kg:.1f}",
+                    ],
+                }), hide_index=True, width="stretch")
+
+                st.caption(
+                    "La distancia entre P10 y P90 muestra la cola del lote: "
+                    "si es muy amplia, hay animales que no están comiendo "
+                    "igual que el resto."
+                )
+
+                try:
+                    import matplotlib.pyplot as plt
+                    _pesos_g = [a["peso_kg"] for a in _animales_an]
+                    _fig, _ax = plt.subplots(figsize=(8, 3.5))
+                    _ax.hist(_pesos_g, bins=min(15, max(5, len(_pesos_g) // 3)),
+                             color="#97bc62", edgecolor="#2c5f2d")
+                    _ax.axvline(_unif.promedio_kg, color="#2c5f2d",
+                                linestyle="--",
+                                label=f"Promedio {_unif.promedio_kg:.0f} kg")
+                    _ax.axvline(_unif.mediana_kg, color="#cc3300",
+                                linestyle=":",
+                                label=f"Mediana {_unif.mediana_kg:.0f} kg")
+                    _ax.set_xlabel("Peso (kg)")
+                    _ax.set_ylabel("Cantidad de animales")
+                    _ax.legend()
+                    _ax.grid(alpha=0.3)
+                    st.pyplot(_fig)
+                except Exception as _e_hist:
+                    st.caption(f"No pude graficar: {_e_hist}")
+
+                # Cola del lote: los que quedaron abajo del P10
+                _cola = sorted(a["peso_kg"] for a in _animales_an
+                               if a["peso_kg"] <= _unif.p10_kg)
+                if _cola:
+                    st.markdown("#### Cola del lote (P10 e inferior)")
+                    st.write(
+                        f"**{len(_cola)} animales** entre "
+                        f"{min(_cola):.0f} y {max(_cola):.0f} kg, contra un "
+                        f"promedio de {_unif.promedio_kg:.0f} kg "
+                        f"({(min(_cola) - _unif.promedio_kg):.0f} kg el más "
+                        f"atrasado)."
+                    )
 
 # ------------------------- DIETA RECOMENDADA --------------------------
 # NOTA: la pestaña 🍽️ Dieta fue eliminada del menú principal.
@@ -16022,54 +15839,58 @@ with tab_help:
 
     st.markdown(
         """
-### Cómo usar la app
+### Cómo está armado el sistema
 
-1. **Procesamiento de drone (imagen / video / entrenamiento)** — se hace en
-   la **app local de la Mac** (`drone_app.py`), no en esta app online. Ahí
-   se cargan los vuelos, se cuentan los animales y se estiman los pesos.
+El sistema son **dos aplicaciones que comparten la misma base de datos**:
 
-2. **Captura con drone** — vuelo cenital (90°) a ~10 m de altura, 4K @ 30 fps.
-   Incluí en el encuadre una **referencia conocida** en el piso (un marcador
-   ArUco impreso de 1,02 m × 1,02 m, o un cuadrado de cinta de color sólido).
+- **Esta app (online)** — gestión: clientes, lotes, dietas, alertas
+  climáticas, ficha clínica, Asesor IA e historial. Se usa desde
+  cualquier navegador, incluido el celular en el campo.
 
-3. **Cargá o guardá las pesadas** — desde la app local de la Mac, o
-   manualmente en **Clientes/Lotes → Cargar pesada manual**. Después las
-   consultás en **Historial**, **Evolución** y el **Asesor IA**.
+- **HMS Drone (local, en la Mac)** — procesamiento de las recorridas:
+  cuenta animales y estima pesos a partir de las fotos y videos del
+  drone. Corre en la Mac porque necesita la placa de video y archivos
+  pesados que no tiene sentido subir a la nube.
 
-4. **Calibración personalizada**: si ya tenés un dataset propio (imagen +
-   peso real), corré el script de calibración:
+El nexo entre las dos es la **ficha del lote**: lo que la Mac calcula se
+guarda ahí, y aparece al instante en esta app.
 
-   ```bash
-   python scripts/calibrate_weight.py --dataset data/calibracion.csv \\
-       --output models/weight_model.json
-   ```
+### El circuito de una recorrida
 
-   El JSON resultante se usa en la app local de la Mac.
+1. **Volás el lote** con el drone, cenital (90°), a **10 m de altura**.
+   La altura la lee el sistema del propio archivo de la foto, así que no
+   hace falta poner ninguna referencia en el piso.
 
-### Para alcanzar el <5 % de error (app local de la Mac)
+2. **Procesás en la Mac** con HMS Drone: elegís la carpeta del vuelo y te
+   devuelve cantidad de animales y peso promedio por corral.
 
-- Usá el modelo `yolov8m-seg.pt` (segmentación) — el área proyectada es
-  mucho más fiel que el bounding box.
-- Calibrá los coeficientes con **al menos 30 muestras** de tu rodeo
-  (área observada vs peso real de balanza).
-- Mantené altura de vuelo y ángulo constantes.
-- Asegurate que la referencia de 1,02 m esté siempre visible y plana.
+3. **Guardás en la ficha** del cliente y lote correspondiente, desde la
+   misma app local.
 
-### Estructura del proyecto
+4. **Consultás acá**: la pesada aparece en **Evolución** (ADG,
+   conversión alimenticia, uniformidad), en **Historial** y queda
+   disponible para el **Asesor IA**.
 
-```
-app.py                   ← UI Streamlit online (gestión)
-drone_app.py             ← App local Mac (procesamiento drone)
-config.yaml              ← Parámetros
-src/
-  calibration.py         ← Detección de la referencia
-  detector.py            ← YOLO (cow class)
-  weight_estimator.py    ← Modelo Peso = a·Area^b · factor_raza + c
-  processor.py           ← Pipeline imagen / video con tracking
-scripts/
-  calibrate_weight.py    ← Ajuste de coeficientes con tu dataset
-data/
-  calibracion_template.csv
-```
+También podés cargar pesadas de balanza a mano, en
+**Clientes y lotes → Cargar pesada manual**. Para el cálculo de ADG da lo
+mismo de dónde venga el dato.
+
+### Qué precisión esperar
+
+El peso estimado se validó contra balanza en La Esperanza Argentina
+(julio 2026): **error de ±5 %** en corrales pesados el día anterior.
+
+Dos condiciones importan mucho:
+
+- **Altura de 10 a 20 m.** Más arriba de 20 m el animal ocupa pocos
+  píxeles y el peso se va para arriba (en la prueba, +22 % a 50-100 m).
+  El sistema avisa cuando las fotos no son confiables para peso.
+
+- **Peso lleno vs vacío.** La estimación se comparó contra pesos llenos.
+  Si comparás contra un peso con desbaste, esperá una diferencia.
+
+El **conteo** es más exigente que el peso: en tropas apretadas el
+detector genérico pierde animales. Por eso conviene contar con fotos
+donde los animales estén separados, o revisar el número a ojo.
         """
     )

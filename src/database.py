@@ -2329,7 +2329,13 @@ def guardar_pesada(lote_id: int, fecha: str, metodo: str,
                     peso_total_kg: float, desvio_kg: float,
                     pesos_individuales: List[float] = None,
                     video_path: str = "", notas: str = "") -> int:
-    cv = (desvio_kg / peso_promedio_kg * 100) if peso_promedio_kg else 0
+    # El CV solo tiene sentido si conocemos el desvío. Una pesada de balanza
+    # donde solo se anotó el promedio deja desvio_kg vacío: en ese caso el CV
+    # queda en NULL (desconocido), que es distinto de 0 (lote perfectamente
+    # parejo). Antes esto rompía con TypeError.
+    cv = None
+    if desvio_kg is not None and peso_promedio_kg:
+        cv = desvio_kg / peso_promedio_kg * 100
     pesos_json = json.dumps(pesos_individuales or [])
     with get_conn() as conn:
         cur = conn.execute(
