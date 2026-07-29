@@ -112,6 +112,45 @@ def crear_detector(modelo: str = rec.MODELO_DEFAULT,
     return detect_fn
 
 
+def crear_detector_mosaico(modelo: str = rec.MODELO_DEFAULT,
+                           conf: float = CONF_PREETIQUETA,
+                           tile: int = None,
+                           overlap: float = None) -> DetectFn:
+    """detect_fn que parte la imagen en mosaicos (ver src/mosaico.py).
+
+    Detecta muchos más animales que la pasada única, porque cada bovino le
+    llega al detector a resolución casi nativa en lugar de reducido 3x.
+    """
+    import cv2
+    from src import mosaico as mos
+
+    tile = tile or mos.TILE_DEFAULT
+    overlap = overlap if overlap is not None else mos.OVERLAP_DEFAULT
+    yolo = rec.crear_yolo(modelo)
+
+    def _predict(recorte):
+        res = yolo.predict(recorte, conf=conf, iou=0.5, imgsz=tile,
+                           classes=rec.CLASES_COCO_BOVINO, verbose=False)[0]
+        out = []
+        if res.boxes is not None and len(res.boxes) > 0:
+            boxes = res.boxes.xyxy.cpu().numpy()
+            confs = res.boxes.conf.cpu().numpy()
+            for box, cf in zip(boxes, confs):
+                out.append((float(box[0]), float(box[1]),
+                            float(box[2]), float(box[3]), float(cf)))
+        return out
+
+    def detect_fn(fuente):
+        img = cv2.imread(str(fuente)) if isinstance(fuente, (str, Path)) \
+            else fuente
+        if img is None:
+            return []
+        return mos.detectar_por_mosaicos(_predict, img, tile=tile,
+                                         overlap=overlap)
+
+    return detect_fn
+
+
 # ----------------------------------------------------------------------
 # 2) Frames de video con >= 1 animal (import cv2 adentro)
 # ----------------------------------------------------------------------
@@ -308,6 +347,11 @@ def main(argv: Optional[List[str]] = None,
                     help="Máximo de frames de video a incluir")
     ap.add_argument("--sin-videos", action="store_true",
                     help="Solo fotos (más rápido)")
+    ap.add_argument("--sin-mosaico", action="store_true",
+                    help="Pasada única en vez de mosaicos (más rápido, "
+                         "detecta bastante menos)")
+    ap.add_argument("--tile", type=int, default=None,
+                    help="Lado del mosaico en px (default 1024)")
     ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args(argv)
 
@@ -321,8 +365,16 @@ def main(argv: Optional[List[str]] = None,
           f"(de {args.origen})")
 
     if detect_fn is None:
-        print(f"Cargando {args.modelo} (pre-etiquetado, conf {args.conf})…")
-        detect_fn = crear_detector(args.modelo, args.conf, args.imgsz)
+        if args.sin_mosaico:
+            print(f"Cargando {args.modelo} "
+                  f"(pasada única, conf {args.conf})…")
+            detect_fn = crear_detector(args.modelo, args.conf, args.imgsz)
+        else:
+            print(f"Cargando {args.modelo} "
+                  f"(mosaicos, conf {args.conf}) — más lento pero detecta "
+                  f"muchos más animales…")
+            detect_fn = crear_detector_mosaico(args.modelo, args.conf,
+                                               args.tile)
 
     items = []
     for i, f in enumerate(fotos, 1):
