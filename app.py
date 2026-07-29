@@ -9535,6 +9535,7 @@ with tab_clientes:
                                     "normal": "🟢",
                                     "sub_uso": "🟡",
                                     "sobre_uso": "🔴",
+                                    "historial_incompleto": "🟣",
                                 }.get(_diag, "⚪")
                                 _alerta = ""
                                 if _stock["dias_restantes"] <= 7 and \

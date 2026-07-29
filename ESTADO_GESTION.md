@@ -56,6 +56,9 @@ clientes: es su centro de comando.
 |---|---|---|
 | — | Commitear y pushear el fix de `SMTP_BCC_CLIENTES` | El bug sigue vivo en producción hasta el push |
 | — | `CARGA_BASE_URL` apunta a un túnel ngrok free de la Mac | Bloqueante real del 482: la URL muere al reiniciar ngrok |
+| — | **Stock inicial / fecha de corte por lote+producto** | El fix de hoy silencia el falso positivo; esto lo resuelve de raíz |
+| — | El dashboard sigue mostrando "Reponer HOY" con historial incompleto | `dashboard_precompute.py:129` solo excluye `sin_entregas` |
+| — | Umbrales de stock configurables desde Configuración | Hoy están escritos a mano en 4 lugares con valores distintos |
 | 485 | Migrar Supabase a São Paulo | Bajaría la latencia de ~200 ms a ~50 ms |
 | 479 | Fotos de inspección a Cloudflare R2 | Hoy van a la base, no escala |
 | 481 | Fase de sombra: crons en la nube + Mac en paralelo con DRY_RUN | Antes de apagar la Mac |
@@ -65,6 +68,24 @@ clientes: es su centro de comando.
 | — | Crear Roxdan y La Esperanza Argentina como clientes | Para poder guardar las recorridas del drone en ficha |
 
 ## Cosas que conviene saber antes de tocar
+
+- **El stock NO es un saldo de depósito, es un balance acumulado.**
+  `kg_restantes = max(0, todas_las_entregas − consumo_teórico_desde_la_primera_entrega)`.
+  Si el lote venía comiendo desde antes de la primera entrega cargada en
+  el sistema, arrastra un déficit permanente y la barra queda clavada en
+  0 hasta que lo cubrís. No hay stock inicial ni fecha de corte: cargar
+  entregas nuevas no "resetea" nada.
+- **Los umbrales de stock están escritos a mano en 4 lugares y no
+  coinciden:** semáforo `≤0` y `≤7` (`app.py:4131`), tarjeta de
+  prioridades `≤0` (`app.py:3599`), alerta a clientes `14`
+  (`alertas_diarias.py:1179`), fin de carga de silo `1`
+  (`alertas_diarias.py:1318`).
+- **Para el análisis AST de nombres huérfanos ahora hay script:**
+  `python3 scripts/nombres_huerfanos.py app.py src/*.py`. Hace scoping
+  léxico de verdad (funciones anidadas, lambdas, comprehensions), así
+  que no tira los falsos positivos de un walk ingenuo. Con `--json`
+  compara antes/después: lo útil es que el diff no traiga huérfanos
+  nuevos, no que el total sea cero.
 
 - **El índice de git se ensucia solo.** El trabajo con índice temporal deja
   un `.git/index.lock` de tamaño 0 que el mount FUSE no puede borrar, y el
@@ -92,6 +113,36 @@ clientes: es su centro de comando.
   base SQLite temporal.
 
 ## Historial de sesiones
+
+### 29/07/2026 (noche) — Falsos positivos de stock a clientes
+
+Mauricio avisó que a clientes reales les está llegando el mail de stock
+bajo, y que cargó bolsas y la barra de stock no se movió. **Es el mismo
+bug las dos cosas.**
+
+- **Causa.** `calcular_stock_actual` hace
+  `max(0, entregas − consumo_teórico_desde_la_primera_entrega)`. Cuando
+  el lote venía comiendo desde antes de la primera entrega cargada, el
+  balance da negativo y el `max()` lo tapa con un 0 que es
+  indistinguible de "se quedó sin producto". Reproducido en SQLite: lote
+  con primera entrega hace 60 días y 1.000 kg, consumo 108 kg/día →
+  déficit 5.480 kg; cargar 10 bolsas (300 kg) y después 40 más
+  (1.200 kg) deja la barra en 0 kg las tres veces. Hay que cargar más de
+  6.480 kg para que se mueva un kilo.
+- Ese 0 es el que `clientes_con_stock_bajo(14)` lee como 0 días y manda
+  al cliente. El código ya excluía `sin_entregas`, pero el historial
+  incompleto devolvía `sub_uso` y se colaba.
+- **Fix.** Nuevo diagnóstico `historial_incompleto` (con
+  `deficit_historial_kg` en el dict de retorno) cuando el consumo
+  acumulado supera lo entregado, y `clientes_con_stock_bajo` lo excluye
+  igual que `sin_entregas`. Verificado con 3 casos: historial incompleto
+  excluido, stock bajo real sigue avisando, stock holgado no avisa.
+  Icono 🟣 en la tabla de stock para que se vea el estado.
+- **Lo que el fix NO hace:** no arregla el cálculo, solo deja de avisarle
+  al cliente por un dato que no es confiable. La barra sigue en 0 hasta
+  que exista stock inicial / fecha de corte (pendiente nuevo).
+- Agregado `scripts/nombres_huerfanos.py`, que faltaba: este archivo
+  mandaba a correr el análisis AST pero el script no existía.
 
 ### 29/07/2026 (tarde) — Cerrar el 484 y un bug de BCC en la nube
 

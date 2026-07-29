@@ -346,6 +346,17 @@ def calcular_stock_actual(
     else:
         consumo_acumulado = 0.0
     kg_restantes = max(0.0, kg_entregados - consumo_acumulado)
+    # Si el consumo acumulado supera lo entregado, el balance dio
+    # negativo y el max() de arriba lo tapa con un 0. Ese 0 NO
+    # significa "el cliente se quedó sin producto": significa que el
+    # lote venía comiendo desde antes de la primera entrega cargada en
+    # el sistema, así que faltan entregas viejas. Distinguir los dos
+    # casos es lo que evita avisarle al cliente que se quedó sin
+    # producto el día después de que le entregaste bolsas
+    # (ver clientes_con_stock_bajo).
+    deficit_historial = round(
+        max(0.0, consumo_acumulado - kg_entregados), 1,
+    )
 
     # Días que faltan para agotar, proyectando hacia adelante con la
     # dieta vigente día por día (la fase puede aún cambiar de 3→4
@@ -414,9 +425,21 @@ def calcular_stock_actual(
                     f"días (esperado: {dias_teoricos:.0f})."
                 )
 
+    if deficit_historial > 0:
+        diagnostico = "historial_incompleto"
+        detalle_diag = (
+            f"El consumo teórico desde la primera entrega cargada "
+            f"({primera.isoformat()}) supera lo entregado en "
+            f"{deficit_historial:.0f} kg. Faltan entregas anteriores en "
+            f"el sistema, así que el stock calculado no es confiable: "
+            f"cargá las entregas que falten o fijá un stock inicial "
+            f"para este lote."
+        )
+
     return {
         "kg_entregados_total": round(kg_entregados, 1),
         "kg_restantes_hoy": round(kg_restantes, 1),
+        "deficit_historial_kg": deficit_historial,
         "consumo_diario_kg": consumo_dia,
         "consumo_total_a_fecha": round(consumo_acumulado, 1),
         "fecha_agotamiento": fecha_agot.isoformat(),
@@ -2329,8 +2352,13 @@ def clientes_con_stock_bajo(
                     continue
                 if not stk:
                     continue
-                if stk.get(
-                    "diagnostico_uso") == "sin_entregas":
+                if stk.get("diagnostico_uso") in (
+                        "sin_entregas", "historial_incompleto"):
+                    # sin_entregas: no hay nada que reponer.
+                    # historial_incompleto: el 0 kg es un artefacto de
+                    # entregas viejas que faltan cargar, no un
+                    # agotamiento real. Avisarle al cliente por esto es
+                    # un falso positivo.
                     continue
                 dias = stk.get("dias_restantes", 0) or 0
                 if dias > umbral_dias:
