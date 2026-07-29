@@ -65,6 +65,23 @@ def _cargar_smtp_desde_env() -> Optional[Dict]:
             return default
         return str(v).strip().lower() in ("1", "true", "yes", "si", "sí")
 
+    def _bcc():
+        """`SMTP_BCC_CLIENTES` admite dos formas: una dirección de email
+        (igual que el JSON local) o un booleano tipo toggle. Con un email
+        se usa esa dirección; con un booleano en true se cae a
+        SMTP_ADMIN_EMAIL. Nunca devolver el bool crudo: `enviar_email`
+        trata este campo como dirección y colaba "True" como
+        destinatario del BCC, que el servidor rechaza."""
+        raw = (os.getenv("SMTP_BCC_CLIENTES") or "").strip()
+        admin = os.getenv("SMTP_ADMIN_EMAIL", "").strip()
+        if not raw:
+            return admin
+        if "@" in raw:
+            return raw
+        if raw.lower() in ("1", "true", "yes", "si", "sí"):
+            return admin
+        return ""
+
     return {
         "host": host,
         "port": int(os.getenv("SMTP_PORT", "465")),
@@ -75,7 +92,7 @@ def _cargar_smtp_desde_env() -> Optional[Dict]:
         "use_ssl": _b("SMTP_USE_SSL", True),
         "use_tls": _b("SMTP_USE_TLS", False),
         "admin_email": os.getenv("SMTP_ADMIN_EMAIL", ""),
-        "bcc_clientes": _b("SMTP_BCC_CLIENTES", True),
+        "bcc_clientes": _bcc(),
         "imap_host": os.getenv("IMAP_HOST", ""),
         "imap_user": os.getenv("IMAP_USER", ""),
         "imap_password": os.getenv("IMAP_PASSWORD", ""),

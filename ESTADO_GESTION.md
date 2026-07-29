@@ -54,7 +54,8 @@ clientes: es su centro de comando.
 
 | # | Tarea | Notas |
 |---|---|---|
-| 484 | Cargar los 22 secrets en Streamlit Cloud (formato TOML) | Ya están en GitHub Actions |
+| — | Commitear y pushear el fix de `SMTP_BCC_CLIENTES` | El bug sigue vivo en producción hasta el push |
+| — | `CARGA_BASE_URL` apunta a un túnel ngrok free de la Mac | Bloqueante real del 482: la URL muere al reiniciar ngrok |
 | 485 | Migrar Supabase a São Paulo | Bajaría la latencia de ~200 ms a ~50 ms |
 | 479 | Fotos de inspección a Cloudflare R2 | Hoy van a la base, no escala |
 | 481 | Fase de sombra: crons en la nube + Mac en paralelo con DRY_RUN | Antes de apagar la Mac |
@@ -64,6 +65,15 @@ clientes: es su centro de comando.
 | — | Crear Roxdan y La Esperanza Argentina como clientes | Para poder guardar las recorridas del drone en ficha |
 
 ## Cosas que conviene saber antes de tocar
+
+- **El índice de git se ensucia solo.** El trabajo con índice temporal deja
+  un `.git/index.lock` de tamaño 0 que el mount FUSE no puede borrar, y el
+  `.git/index` queda desincronizado (el 29/07 tenía 12 borrados staged,
+  entre ellos los dos `ESTADO_*.md`; en HEAD estaban todos). Se arregla
+  moviendo el lock a `_to_delete/` y corriendo `git read-tree HEAD`, que no
+  toca el working tree. Conviene mirar `git status` antes de pushear.
+- **Streamlit Cloud corre Python 3.14** (App settings → General). Tenerlo en
+  cuenta si una dependencia no tiene wheel para esa versión.
 
 - **Git en esta carpeta:** es un mount FUSE donde `unlink` está prohibido.
   Los comandos normales de git fallan. Se commitea con plumbing:
@@ -82,6 +92,36 @@ clientes: es su centro de comando.
   base SQLite temporal.
 
 ## Historial de sesiones
+
+### 29/07/2026 (tarde) — Cerrar el 484 y un bug de BCC en la nube
+
+- **Los 22 secrets ya estaban cargados en Streamlit Cloud.** El pendiente
+  484 estaba viejo. Verificado comparando hash SHA-256 de cada valor contra
+  `.env` + `data/*.json` de la Mac: los 22 coinciden. La app en la nube
+  levanta bien (5 clientes, 173 animales, clima y Asesor IA operativos).
+- **Bug encontrado y arreglado en `src/alertas_email.py`.**
+  `_cargar_smtp_desde_env` leía `SMTP_BCC_CLIENTES` con el helper `_b()`,
+  o sea como booleano, pero `enviar_email` trata `bcc_clientes` como
+  dirección de email y la mete en `all_recipients`. Medido:
+  con `"true"` los destinatarios quedaban `['cliente@…', 'True']` — el
+  servidor rechaza ese RCPT pero acepta el del cliente, así que `sendmail`
+  no levanta excepción y la función devuelve `True, "Email enviado"`;
+  con un email real devolvía `False` y no mandaba BCC. En los dos casos
+  Mauricio perdía su copia oculta sin ningún error visible. Ahora un helper
+  `_bcc()` acepta email, lista con comas, o booleano cayendo a
+  `SMTP_ADMIN_EMAIL`. **Todavía sin pushear: en producción el bug sigue.**
+- **`.streamlit/secrets.toml.example` reescrito.** Tenía nombres que el
+  código no lee (`SMTP_FROM`, `SMTP_BCC_ADMIN`, `IMAP_PORT`,
+  `TWILIO_WHATSAPP_FROM`, `TWILIO_ADMIN_WHATSAPP`) y le faltaban
+  `CARGA_BASE_URL`, `TWILIO_MODO_SANDBOX` y los `SMTP_USE_*`. Cargar los
+  secrets siguiendo ese archivo dejaba WhatsApp muerto. Sus 22 claves ahora
+  son idénticas a las de `.github/workflows/`. `.env.example` sigue con los
+  nombres viejos, pero ese es para la Mac y ahí manda el JSON.
+- La doc decía puerto 465 con SSL; la config real es Brevo en 587 con
+  STARTTLS. Los valores de verdad salen de `data/smtp_config.json`.
+- Índice de git limpiado (ver "Cosas que conviene saber").
+- Generado `data/.secrets_streamlit.toml` (permiso 600, ignorado por
+  `data/.*`) como copia local del TOML de la nube.
 
 ### 29/07/2026 — Separar el drone de la gestión
 - Renombrado el repo y la URL (antes decía "determinación de pesos y
