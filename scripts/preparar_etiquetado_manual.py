@@ -105,6 +105,35 @@ antes de cerrar y avisame — así no se pierde nada.
 """
 
 
+def elegir_desde_ranking(dataset: Path, ranking_csv: Path, n: int):
+    """Usa el ranking de scripts/seleccionar_limpias.py.
+
+    Ese script ya midió qué imágenes tienen el pre-etiquetado más completo
+    (escenas de animales separados, donde el detector estuvo cómodo). Son
+    las que menos trabajo manual necesitan: falta agregar 1 a 3 cajas, no
+    empezar de cero.
+    """
+    import csv as _csv
+    orden = []
+    with ranking_csv.open(encoding="utf-8") as fh:
+        for fila in _csv.DictReader(fh):
+            orden.append(fila["nombre"])
+
+    items = []
+    for nombre in orden[:n]:
+        for split in ("train", "val"):
+            img = dataset / "images" / split / f"{nombre}.jpg"
+            if img.exists():
+                lab = dataset / "labels" / split / f"{nombre}.txt"
+                n_cajas = 0
+                if lab.exists():
+                    n_cajas = sum(1 for l in lab.read_text().splitlines()
+                                  if l.strip())
+                items.append((nombre, img, lab, n_cajas))
+                break
+    return items
+
+
 def elegir_imagenes(dataset: Path, n: int):
     """Elige n imágenes priorizando variedad de escenas y densidades.
 
@@ -175,7 +204,19 @@ def main(argv=None) -> None:
               f"scripts/preparar_dataset.py")
         return
 
-    elegidas = elegir_imagenes(args.dataset, args.n)
+    # Si ya corriste seleccionar_limpias.py, usamos su ranking: son las
+    # imágenes que menos trabajo manual necesitan.
+    ranking = REPO_ROOT / "candidatas_limpias" / "ranking.csv"
+    if ranking.exists():
+        print(f"Usando el ranking de {ranking.parent.name}/ "
+              f"(las escenas que menos trabajo manual necesitan)\n")
+        elegidas = elegir_desde_ranking(args.dataset, ranking, args.n)
+    else:
+        print("No encontré candidatas_limpias/ranking.csv — elijo por "
+              "variedad. Para mejores resultados corré primero "
+              "scripts/seleccionar_limpias.py\n")
+        elegidas = elegir_imagenes(args.dataset, args.n)
+
     if not elegidas:
         print("No hay imágenes con detecciones en el dataset.")
         return

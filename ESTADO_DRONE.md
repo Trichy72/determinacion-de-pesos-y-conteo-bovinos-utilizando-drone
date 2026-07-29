@@ -124,20 +124,35 @@ Mejor combinación medida sobre 3 fotos (`scripts/probar_deteccion.py`):
 
 ## Próximo paso concreto
 
+**Resultado de la Vía B (29/07/2026): no alcanza sola.** Se corrió
+`seleccionar_limpias.py` sobre las 100 imágenes y se revisaron las
+candidatas mejor puntuadas. Ni esas están completas:
+
+- #1 DJI_0089_t009 (puntaje 0.76): 7 marcados de ~13 reales.
+- #4 DJI_0082 (0.62): 6 de ~9, y una caja cae sobre una **sombra**.
+- #5 DJI_0120_t021 (0.62): 4 cajas perfectas, falta **1 animal**.
+
+El puntaje **ordena bien** (las manadas apretadas quedan abajo) pero el
+nivel absoluto de cobertura no llega a un dataset limpio.
+
+**Lo que sí cambió:** el trabajo manual sobre estas 40 candidatas es
+chico. Son escenas fáciles donde falta agregar **1 a 3 cajas por imagen**,
+no 20. Estimación: 20-30 minutos, no una hora.
+
+**Por eso el próximo paso es la Vía C sobre las 40 candidatas:**
+
 ```bash
-cd "~/Documents/Claude/Projects/determinacion de pesos y conteo bovinos utilizando drone"
-source .venv/bin/activate
-python scripts/seleccionar_limpias.py
+python scripts/preparar_etiquetado_manual.py --n 40
 ```
 
-Tarda ~30-40 min, va solo. Puntúa las 100 imágenes de `dataset_v2` según
-qué tan cómodo estuvo el detector (confianza media + solapamiento de
-cajas) y deja las 40 mejores dibujadas en `candidatas_limpias/`, numeradas
-por puntaje. Rojo = confianza alta, amarillo = dudosa.
+El script ahora detecta `candidatas_limpias/ranking.csv` y usa ese orden
+(las que menos trabajo necesitan) en lugar de elegir por variedad. Deja las
+imágenes + labels + INSTRUCCIONES.txt en `etiquetado_manual/`, listas para
+makesense.ai. Arranca con 188 cajas ya puestas (4,7 por imagen).
 
-**Después Claude revisa esas imágenes una por una** y se queda solo con las
-que no tengan animales sin marcar. Con esas armamos el dataset y va a
-Colab (`notebooks/finetune_hms.ipynb`, que lee el zip desde Google Drive).
+Después de exportar el zip de makesense: armar el dataset, entrenar en
+Colab, y con el modelo resultante re-etiquetar las 100 imágenes
+automáticamente (segunda vuelta).
 
 ## Datos de campo disponibles
 
