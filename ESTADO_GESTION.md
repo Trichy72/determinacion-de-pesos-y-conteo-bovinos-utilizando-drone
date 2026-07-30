@@ -70,6 +70,13 @@ clientes: es su centro de comando.
 
 ## Cosas que conviene saber antes de tocar
 
+- **Cualquier `.yml` dentro de `.github/workflows/` se ejecuta**, tenga
+  el nombre que tenga. El guión bajo no lo exceptúa. `_env.yml` era solo
+  comentarios y fallaba en cada push, dejando Actions en rojo de forma
+  permanente — lo cual entrena a ignorar las fallas, justo cuando el
+  backup depende de que se noten. Movido a `docs/variables-de-entorno.md`
+  el 30/07/2026.
+
 - **CUIT en clientes.** `normalizar_cuit` (deja solo dígitos),
   `cuit_valido` (largo **y** dígito verificador módulo 11),
   `formatear_cuit` y `buscar_cliente_por_cuit`, en `src/database.py`. Se
@@ -151,6 +158,19 @@ clientes: es su centro de comando.
   base SQLite temporal.
 
 ## Historial de sesiones
+
+### 30/07/2026 (tarde 3) — Backup verificado en producción
+
+  - **El backup corrió de verdad y anduvo**: `pg_dump` 17 contra Supabase
+    a través del pooler, dump de 0,29 MB con 51 tablas con datos,
+    verificación OK y mail enviado. 37 segundos en total. La duda que
+    quedaba (si el pooler se llevaría bien con `pg_dump`) está resuelta.
+  - `_env.yml` movido a `docs/variables-de-entorno.md`: fallaba en cada
+    push y dejaba Actions siempre en rojo.
+  - Verificado también: los 3 commits en `master`, el rol
+    `hms_ganadera_ro` creado con permisos mínimos (solo `SELECT` sobre
+    `comprobantes`, `clientes` y `productos`, sin superusuario), y la app
+    en producción levantando bien después del deploy.
 
 ### 30/07/2026 (tarde 2) — CUIT en clientes
 
