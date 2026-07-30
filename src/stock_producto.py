@@ -298,11 +298,36 @@ def calcular_stock_actual(
     if consumo_dia <= 0:
         return None
 
+    # ── Fecha de corte ────────────────────────────────────────────
+    # El ajuste vigente (el más reciente con fecha <= la de referencia)
+    # declara cuántos kg había ese día. Cuando existe, el cálculo
+    # arranca ahí y todo lo anterior se ignora: es la salida para los
+    # lotes que arrastran un déficit por entregas viejas sin cargar.
+    ajuste = None
+    try:
+        for _a in db.listar_ajustes_stock(cliente_id, lote_id):
+            if not _mismo_producto(_a.get("producto", ""), producto):
+                continue
+            if (_a.get("fecha") or "")[:10] <= fecha_referencia[:10]:
+                ajuste = _a      # ya vienen ordenados por fecha DESC
+                break
+    except Exception:
+        ajuste = None
+    corte = None
+    if ajuste:
+        try:
+            corte = datetime.strptime(
+                ajuste["fecha"][:10], "%Y-%m-%d",
+            ).date()
+        except (ValueError, TypeError, KeyError):
+            ajuste, corte = None, None
+
     # Entregas del cliente para este producto, filtradas al lote
     # (si la entrega tiene lote_id, solo cuentan las de este lote;
     # si está en None, suponemos que aplica a todo el cliente).
     todas = db.listar_entregas_cliente(cliente_id, limit=500)
     entregas_filtradas = []
+    kg_en_corte = 0.0
     for e in todas:
         if not _mismo_producto(e.get("producto_nombre", ""), producto):
             continue
@@ -310,9 +335,31 @@ def calcular_stock_actual(
         # solo aplica si coincide; si está en None, aplica.
         if e.get("lote_id") and e["lote_id"] != lote_id:
             continue
+        if corte is not None:
+            # Las entregas hasta el día del corte ya están contadas
+            # dentro de los kg declarados: sumarlas otra vez sería
+            # contar doble.
+            try:
+                _f_e = datetime.strptime(
+                    e["fecha_entrega"][:10], "%Y-%m-%d",
+                ).date()
+            except (ValueError, TypeError, KeyError):
+                continue
+            if _f_e == corte:
+                # Caso ambiguo de verdad: ¿el recuento se hizo antes o
+                # después de que llegara el camión ese día? Ninguna regla
+                # lo resuelve. Se asume incluida (es lo que significa
+                # "los kg que tengo hoy") pero se reporta aparte para
+                # poder avisarle a Mauricio, en vez de descontarla en
+                # silencio — que es exactamente el bug que la fecha de
+                # corte vino a arreglar.
+                kg_en_corte += float(e.get("kg_total") or 0)
+                continue
+            if _f_e < corte:
+                continue
         entregas_filtradas.append(e)
 
-    if not entregas_filtradas:
+    if not entregas_filtradas and ajuste is None:
         return {
             "kg_entregados_total": 0,
             "kg_restantes_hoy": 0,
@@ -325,13 +372,23 @@ def calcular_stock_actual(
             "entregas": [],
         }
 
-    kg_entregados = sum(e.get("kg_total") or 0 for e in entregas_filtradas)
-    # Fecha de la primera entrega → desde ahí empieza el consumo
-    fechas = [
-        datetime.strptime(e["fecha_entrega"][:10], "%Y-%m-%d").date()
-        for e in entregas_filtradas
-    ]
-    primera = min(fechas)
+    kg_posteriores = sum(
+        e.get("kg_total") or 0 for e in entregas_filtradas
+    )
+    if ajuste is not None:
+        # Base declarada + lo entregado después del corte.
+        kg_entregados = (
+            float(ajuste.get("kg_existencia") or 0) + kg_posteriores
+        )
+        primera = corte
+    else:
+        kg_entregados = kg_posteriores
+        # Fecha de la primera entrega → desde ahí empieza el consumo
+        fechas = [
+            datetime.strptime(e["fecha_entrega"][:10], "%Y-%m-%d").date()
+            for e in entregas_filtradas
+        ]
+        primera = min(fechas)
     # Consumo acumulado: sumar día por día respetando el plan de
     # adaptación. En el primer día del lote la dieta puede tener
     # bajo % de Fibroter (fase 1), y subir gradualmente hasta el
@@ -354,9 +411,15 @@ def calcular_stock_actual(
     # casos es lo que evita avisarle al cliente que se quedó sin
     # producto el día después de que le entregaste bolsas
     # (ver clientes_con_stock_bajo).
-    deficit_historial = round(
-        max(0.0, consumo_acumulado - kg_entregados), 1,
-    )
+    if ajuste is not None:
+        # Con fecha de corte no hay historial que inferir: si el balance
+        # da negativo es que se consumió todo lo declarado, y eso SI es
+        # un agotamiento real que hay que avisar.
+        deficit_historial = 0.0
+    else:
+        deficit_historial = round(
+            max(0.0, consumo_acumulado - kg_entregados), 1,
+        )
 
     # Días que faltan para agotar, proyectando hacia adelante con la
     # dieta vigente día por día (la fase puede aún cambiar de 3→4
@@ -440,6 +503,12 @@ def calcular_stock_actual(
         "kg_entregados_total": round(kg_entregados, 1),
         "kg_restantes_hoy": round(kg_restantes, 1),
         "deficit_historial_kg": deficit_historial,
+        "fecha_corte": (corte.isoformat() if corte else None),
+        "kg_entregas_en_fecha_corte": round(kg_en_corte, 1),
+        "kg_declarados_en_corte": (
+            float(ajuste.get("kg_existencia") or 0)
+            if ajuste is not None else None
+        ),
         "consumo_diario_kg": consumo_dia,
         "consumo_total_a_fecha": round(consumo_acumulado, 1),
         "fecha_agotamiento": fecha_agot.isoformat(),

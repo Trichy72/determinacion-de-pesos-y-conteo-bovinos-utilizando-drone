@@ -3544,3 +3544,125 @@ def leer_preferencia(clave: str, default: Optional[str] = None) -> Optional[str]
     if not r:
         return default
     return r["valor"]
+
+
+# =====================================================================
+# AJUSTES DE STOCK (fecha de corte)
+# =====================================================================
+# Por que existe: el stock se calcula como
+#   entregas_cargadas − consumo_teorico_desde_la_primera_entrega
+# Si faltan entregas viejas en el sistema (te olvidaste de cargarlas),
+# ese balance arrastra un deficit permanente y la barra queda clavada en
+# cero por mas bolsas que cargues. Un ajuste corta ese arrastre: declara
+# "a esta fecha habia X kg" y el calculo arranca de ahi, ignorando todo
+# lo anterior. Sirve igual para corregir la deriva cada vez que hacés un
+# recuento fisico.
+
+_AJUSTES_INIT: dict = {"done": False}
+
+
+def _ensure_ajustes_stock_table() -> None:
+    """Crea `ajustes_stock` si no existe. Idempotente.
+
+    Va por separado del SCHEMA porque `init_db` sale temprano cuando la
+    base es Postgres (el SCHEMA usa sintaxis SQLite-only), asi que en la
+    nube nadie crearia la tabla. El tipo de la PK es lo unico que
+    cambia entre backends.
+    """
+    if _AJUSTES_INIT["done"]:
+        return
+    pk = ("id SERIAL PRIMARY KEY" if _usando_postgres()
+          else "id INTEGER PRIMARY KEY AUTOINCREMENT")
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                f"""CREATE TABLE IF NOT EXISTS ajustes_stock (
+                        {pk},
+                        cliente_id INTEGER NOT NULL,
+                        lote_id INTEGER,
+                        producto TEXT NOT NULL,
+                        fecha TEXT NOT NULL,
+                        kg_existencia REAL NOT NULL,
+                        notas TEXT,
+                        creado_en TEXT
+                    )"""
+            )
+            conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_ajustes_stock_busqueda
+                   ON ajustes_stock (cliente_id, lote_id, fecha)"""
+            )
+        _AJUSTES_INIT["done"] = True
+    except Exception:
+        # No romper la app si no se puede crear (permisos, conexion).
+        # obtener_ajuste_vigente devolvera None y el calculo sigue
+        # funcionando como antes.
+        pass
+
+
+@_invalida_cache
+def crear_ajuste_stock(
+    cliente_id: int, producto: str, fecha: str, kg_existencia: float,
+    lote_id: Optional[int] = None, notas: str = "",
+) -> int:
+    """Registra un recuento: "al `fecha` habia `kg_existencia` kg".
+
+    Args:
+        cliente_id: id del cliente.
+        producto: nombre del producto, como aparece en la dieta.
+        fecha: ISO YYYY-MM-DD. El corte es al CIERRE de ese dia, asi
+            que las entregas de esa misma fecha se consideran ya
+            incluidas en `kg_existencia`.
+        kg_existencia: kg fisicos en el campo a esa fecha. Puede ser 0.
+        lote_id: si el recuento es de un lote puntual. None = aplica a
+            todo el cliente para ese producto.
+        notas: texto libre (ej. "recuento con Ramon").
+
+    Returns:
+        id del ajuste creado.
+    """
+    _ensure_ajustes_stock_table()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO ajustes_stock
+                 (cliente_id, lote_id, producto, fecha, kg_existencia,
+                  notas, creado_en)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (cliente_id, lote_id, producto, fecha[:10],
+             float(kg_existencia), notas,
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        return cur.lastrowid
+
+
+@_cache_lectura
+def listar_ajustes_stock(
+    cliente_id: int, lote_id: Optional[int] = None,
+) -> List[Dict]:
+    """Ajustes del cliente, mas nuevos primero. Incluye los genericos
+    del cliente (lote_id NULL) y, si se pasa `lote_id`, los de ese lote."""
+    _ensure_ajustes_stock_table()
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM ajustes_stock
+                   WHERE cliente_id = ?
+                   ORDER BY fecha DESC, id DESC""",
+                (cliente_id,),
+            ).fetchall()
+    except Exception:
+        return []
+    out = [dict(r) for r in rows]
+    if lote_id is not None:
+        out = [a for a in out
+               if a.get("lote_id") in (None, lote_id)]
+    return out
+
+
+@_invalida_cache
+def borrar_ajuste_stock(ajuste_id: int) -> None:
+    """Borra un ajuste (para cuando cargaste un numero equivocado)."""
+    _ensure_ajustes_stock_table()
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM ajustes_stock WHERE id = ?", (ajuste_id,),
+        )

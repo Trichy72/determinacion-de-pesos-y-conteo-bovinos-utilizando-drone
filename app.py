@@ -9557,7 +9557,27 @@ with tab_clientes:
                                     "Se acaba":
                                         _stock.get(
                                             "fecha_agotamiento") or "—",
+                                    "Corte":
+                                        _stock.get("fecha_corte") or "—",
                                 })
+                                # Caso ambiguo: hay una entrega con la
+                                # misma fecha que el corte. Se asume ya
+                                # incluida en los kg declarados, pero se
+                                # avisa en vez de descontarla callado.
+                                _kg_amb = _stock.get(
+                                    "kg_entregas_en_fecha_corte") or 0
+                                if _kg_amb > 0:
+                                    st.info(
+                                        f"ℹ️ **{_l_st['identificador']} · "
+                                        f"{_prod}:** hay "
+                                        f"{_kg_amb:.0f} kg entregados el "
+                                        f"mismo día del corte "
+                                        f"({_stock.get('fecha_corte')}). "
+                                        f"Se consideran **ya incluidos** en "
+                                        f"los kg que declaraste. Si los "
+                                        f"contaste aparte, corregí el corte "
+                                        f"a un día antes."
+                                    )
                         if _filas_stock:
                             import pandas as _pd_stock
                             st.dataframe(
@@ -9583,6 +9603,119 @@ with tab_clientes:
                                 "lote y registrá una entrega para ver "
                                 "el cálculo."
                             )
+
+                        # === Fecha de corte de stock ===
+                        with st.expander(
+                            "🎯 Fijar stock a una fecha "
+                            "(cuando el cálculo arrastra un error)"
+                        ):
+                            st.caption(
+                                "El stock se calcula como *entregas "
+                                "cargadas − consumo teórico desde la "
+                                "primera entrega*. Si faltan entregas "
+                                "viejas en el sistema, arrastra un "
+                                "déficit y la barra queda clavada en cero "
+                                "por más bolsas que cargues. Acá declarás "
+                                "cuántos kg hay de verdad a una fecha y "
+                                "el cálculo arranca de ahí, ignorando "
+                                "todo lo anterior."
+                            )
+                            _lotes_corte = [
+                                l for l in _lotes_act_cli
+                                if l.get("estado") == "activo"
+                            ]
+                            if not _lotes_corte:
+                                st.caption("No hay lotes activos.")
+                            else:
+                                _op_lote = {
+                                    f"{l['identificador']}": l["id"]
+                                    for l in _lotes_corte
+                                }
+                                _c1, _c2 = st.columns(2)
+                                _lote_sel = _c1.selectbox(
+                                    "Lote", list(_op_lote.keys()),
+                                    key="corte_lote",
+                                )
+                                _prods_corte = listar_productos_hms_lote(
+                                    cli_para_editar, _op_lote[_lote_sel],
+                                ) or listar_productos_lote(
+                                    _op_lote[_lote_sel]
+                                )
+                                if not _prods_corte:
+                                    st.caption(
+                                        "Ese lote no tiene productos en "
+                                        "la dieta."
+                                    )
+                                else:
+                                    _prod_sel = _c2.selectbox(
+                                        "Producto", _prods_corte,
+                                        key="corte_producto",
+                                    )
+                                    _c3, _c4 = st.columns(2)
+                                    _fecha_corte = _c3.date_input(
+                                        "Fecha del recuento",
+                                        key="corte_fecha",
+                                    )
+                                    _kg_corte = _c4.number_input(
+                                        "Kg en existencia a esa fecha",
+                                        min_value=0.0, step=10.0,
+                                        key="corte_kg",
+                                        help="Los kg físicos que hay en "
+                                             "el campo. Puede ser 0.",
+                                    )
+                                    _notas_corte = st.text_input(
+                                        "Nota (opcional)",
+                                        key="corte_notas",
+                                        placeholder="Ej: recuento con "
+                                                    "el encargado",
+                                    )
+                                    if st.button(
+                                        "Fijar stock a esa fecha",
+                                        key="corte_guardar",
+                                        type="primary",
+                                    ):
+                                        try:
+                                            db.crear_ajuste_stock(
+                                                cli_para_editar,
+                                                _prod_sel,
+                                                _fecha_corte.isoformat(),
+                                                float(_kg_corte),
+                                                lote_id=_op_lote[_lote_sel],
+                                                notas=_notas_corte,
+                                            )
+                                            st.success(
+                                                f"✅ Stock fijado: "
+                                                f"{_kg_corte:.0f} kg de "
+                                                f"{_prod_sel} al "
+                                                f"{_fecha_corte.isoformat()}"
+                                            )
+                                            st.rerun()
+                                        except Exception as _e_corte:
+                                            st.error(f"Error: {_e_corte}")
+
+                                # Cortes ya cargados, con opción de borrar
+                                _ajustes = db.listar_ajustes_stock(
+                                    cli_para_editar,
+                                )
+                                if _ajustes:
+                                    st.markdown("**Cortes cargados**")
+                                    for _aj in _ajustes[:12]:
+                                        _ca, _cb = st.columns([6, 1])
+                                        _ca.caption(
+                                            f"{_aj['fecha']} · "
+                                            f"{_aj['producto']} · "
+                                            f"{(_aj.get('kg_existencia') or 0):.0f} kg"
+                                            + (f" · {_aj['notas']}"
+                                               if _aj.get("notas") else "")
+                                        )
+                                        if _cb.button(
+                                            "Borrar",
+                                            key=f"del_corte_{_aj['id']}",
+                                        ):
+                                            db.borrar_ajuste_stock(
+                                                _aj["id"]
+                                            )
+                                            st.rerun()
 
                         # === Histórico de entregas ===
                         st.markdown("##### 📜 Histórico de entregas")

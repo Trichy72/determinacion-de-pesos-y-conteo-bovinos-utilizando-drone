@@ -56,7 +56,6 @@ clientes: es su centro de comando.
 |---|---|---|
 | — | Commitear y pushear el fix de `SMTP_BCC_CLIENTES` | El bug sigue vivo en producción hasta el push |
 | — | `CARGA_BASE_URL` apunta a un túnel ngrok free de la Mac | Bloqueante real del 482: la URL muere al reiniciar ngrok |
-| — | **Stock inicial / fecha de corte por lote+producto** | El fix de hoy silencia el falso positivo; esto lo resuelve de raíz |
 | — | El dashboard sigue mostrando "Reponer HOY" con historial incompleto | `dashboard_precompute.py:129` solo excluye `sin_entregas` |
 | — | Umbrales de stock configurables desde Configuración | Hoy están escritos a mano en 4 lugares con valores distintos |
 | — | `backups/restaurar_backup.sh` quedó obsoleto | Restaura a `data/cattle_tracker.db`: es de la era SQLite, no sirve para Postgres |
@@ -70,6 +69,16 @@ clientes: es su centro de comando.
 | — | Crear Roxdan y La Esperanza Argentina como clientes | Para poder guardar las recorridas del drone en ficha |
 
 ## Cosas que conviene saber antes de tocar
+
+- **Fecha de corte de stock.** `ajustes_stock` (cliente, lote, producto,
+  fecha, kg) le pone un piso al cálculo: con un ajuste vigente, el stock
+  arranca de los kg declarados, suma solo las entregas POSTERIORES y
+  acumula consumo desde esa fecha. Las entregas con la MISMA fecha del
+  corte se consideran ya incluidas en lo declarado, y eso se reporta en
+  `kg_entregas_en_fecha_corte` para avisarlo en pantalla — la ambigüedad
+  (¿contó antes o después de que llegara el camión?) no la resuelve
+  ninguna regla, así que se muestra en vez de decidirla en silencio.
+  Con corte, un 0 kg SÍ es agotamiento real y dispara alerta.
 
 - **El repo es PÚBLICO.** Nada de dumps, artifacts con datos, ni
   credenciales. Revisado el 30/07/2026: el historial de git está limpio
@@ -130,6 +139,34 @@ clientes: es su centro de comando.
   base SQLite temporal.
 
 ## Historial de sesiones
+
+### 30/07/2026 (tarde) — Fecha de corte de stock
+
+Cierra el problema que quedó abierto anoche: la barra clavada en cero y
+los lotes mudos.
+
+  - `ajustes_stock` con DDL portable (`SERIAL` en Postgres,
+    `AUTOINCREMENT` en SQLite) creada de forma perezosa, porque
+    `init_db` sale temprano cuando la base es Postgres y en la nube
+    nadie la crearía. Más `crear_ajuste_stock`, `listar_ajustes_stock`
+    y `borrar_ajuste_stock`.
+  - `calcular_stock_actual` toma el ajuste vigente (el más reciente con
+    fecha <= la de referencia) y arranca de ahí. Con corte,
+    `deficit_historial` es 0 por definición: no hay historial que
+    inferir.
+  - Pantalla en la ficha del cliente, abajo de la tabla de stock, con
+    columna "Corte" y listado de cortes cargados.
+  - **Bug propio encontrado y corregido en el camino:** la primera
+    versión descartaba las entregas con la misma fecha del corte, así
+    que cargar bolsas el día del recuento no movía la barra — el mismo
+    síntoma que veníamos a arreglar. Ahora se reportan aparte y se
+    avisan en pantalla.
+  - Verificado contra SQLite (sin ajuste no cambia nada; con ajuste la
+    barra se mueve; las entregas previas al corte no se cuentan dos
+    veces; el ajuste más nuevo manda; un agotamiento real después del
+    corte sí alerta) y la rama Postgres del DDL contra un Postgres 16
+    local (create idempotente, SERIAL, `lote_id` nulo, y la consulta de
+    listado).
 
 ### 30/07/2026 — Backup de la base, y el camino a la facturación
 
