@@ -26,6 +26,8 @@ import os
 import smtplib
 import ssl
 from datetime import datetime
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -142,7 +144,9 @@ def enviar_email(cfg: Dict, to: List[str], subject: str,
                  html: str, text: Optional[str] = None,
                  bcc: Optional[List[str]] = None,
                  embed_logo: bool = True,
-                 con_bcc_admin: bool = True) -> Tuple[bool, str]:
+                 con_bcc_admin: bool = True,
+                 attachments: Optional[List[str]] = None,
+                 ) -> Tuple[bool, str]:
     """Envía un email vía SMTP. Devuelve (ok, mensaje_o_error).
 
     Si en `cfg` está seteado `bcc_clientes` (una dirección o lista de
@@ -218,6 +222,24 @@ def enviar_email(cfg: Dict, to: List[str], subject: str,
                 msg.attach(img)
         except OSError:
             pass
+
+    # Adjuntos (el docstring del modulo los documentaba desde siempre,
+    # pero no estaban implementados: llamar con attachments= tiraba
+    # TypeError). Se usan para mandar el backup de la base por mail.
+    for ruta in (attachments or []):
+        try:
+            with open(ruta, "rb") as f:
+                datos = f.read()
+        except OSError:
+            continue
+        parte = MIMEBase("application", "octet-stream")
+        parte.set_payload(datos)
+        encoders.encode_base64(parte)
+        parte.add_header(
+            "Content-Disposition", "attachment",
+            filename=Path(ruta).name,
+        )
+        msg.attach(parte)
 
     try:
         port = int(cfg.get("port", 587))

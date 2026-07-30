@@ -1,0 +1,99 @@
+name: Backup de la base (diario 03:00 AR)
+
+# Por que existe: la base vive en Supabase plan Free, que NO hace
+# backups automaticos. Verificado el 30/07/2026: el panel del proyecto
+# decia "No backups". Sin esto, un borrado accidental o un problema de
+# cuenta se lleva clientes, lotes, pesadas, dietas e historial.
+#
+# El dump se manda por email al admin y NO se sube como artifact:
+# este repo es PUBLICO y los artifacts de un repo publico los puede
+# descargar cualquiera. Tampoco se commitea, por lo mismo.
+
+on:
+  schedule:
+    # 03:00 Argentina = 06:00 UTC. Antes de las alertas de las 8:00.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: backup-db
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # El servidor es Postgres 17.6 y pg_dump se niega a volcar una
+      # base mas nueva que el cliente. ubuntu-latest trae el 16, asi
+      # que hay que instalar el 17 del repo oficial de PostgreSQL.
+      - name: Instalar cliente de Postgres 17
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
+
+      - name: Backup + verificacion + envio
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PG_DUMP: /usr/lib/postgresql/17/bin/pg_dump
+          PG_RESTORE: /usr/lib/postgresql/17/bin/pg_restore
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
+          SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+          SMTP_USE_SSL: ${{ secrets.SMTP_USE_SSL }}
+          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
+          SMTP_ADMIN_EMAIL: ${{ secrets.SMTP_ADMIN_EMAIL }}
+          SMTP_BCC_CLIENTES: ${{ secrets.SMTP_BCC_CLIENTES }}
+          # Ojo: aca DRY_RUN se ignora a proposito. La variable existe
+          # para no mandar alertas a clientes durante la fase de sombra;
+          # el backup tiene que correr igual, y su mail va solo al admin.
+        run: python scripts/backup_db.py
+
+      # Si el backup falla, que se vea. Un backup que falla en silencio
+      # es peor que no tener backup, porque da falsa tranquilidad.
+      - name: Avisar si fallo
+        if: failure()
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
+          SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+          SMTP_USE_SSL: ${{ secrets.SMTP_USE_SSL }}
+          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
+          SMTP_ADMIN_EMAIL: ${{ secrets.SMTP_ADMIN_EMAIL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import os
+          from src import alertas_email as ae
+          cfg = ae.cargar_config_smtp()
+          if not cfg:
+              raise SystemExit("sin config SMTP, no puedo avisar")
+          dest = cfg.get("admin_email") or cfg.get("from_email")
+          url = os.getenv("RUN_URL", "")
+          ae.enviar_email(
+              cfg, [dest],
+              "FALLO el backup de la base HMS",
+              f"<p>El backup diario de la base no se completo.</p>"
+              f"<p>Log: <a href='{url}'>{url}</a></p>",
+              f"El backup diario de la base no se completo.\nLog: {url}\n",
+              embed_logo=False, con_bcc_admin=False,
+          )
+          PY

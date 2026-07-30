@@ -59,6 +59,8 @@ clientes: es su centro de comando.
 | — | **Stock inicial / fecha de corte por lote+producto** | El fix de hoy silencia el falso positivo; esto lo resuelve de raíz |
 | — | El dashboard sigue mostrando "Reponer HOY" con historial incompleto | `dashboard_precompute.py:129` solo excluye `sin_entregas` |
 | — | Umbrales de stock configurables desde Configuración | Hoy están escritos a mano en 4 lugares con valores distintos |
+| — | `backups/restaurar_backup.sh` quedó obsoleto | Restaura a `data/cattle_tracker.db`: es de la era SQLite, no sirve para Postgres |
+| — | Integración con facturación: crear rol `hms_ganadera_ro` | SQL listo; falta correrlo y cargar `FACTURACION_DATABASE_URL` |
 | 485 | Migrar Supabase a São Paulo | Bajaría la latencia de ~200 ms a ~50 ms |
 | 479 | Fotos de inspección a Cloudflare R2 | Hoy van a la base, no escala |
 | 481 | Fase de sombra: crons en la nube + Mac en paralelo con DRY_RUN | Antes de apagar la Mac |
@@ -68,6 +70,21 @@ clientes: es su centro de comando.
 | — | Crear Roxdan y La Esperanza Argentina como clientes | Para poder guardar las recorridas del drone en ficha |
 
 ## Cosas que conviene saber antes de tocar
+
+- **El repo es PÚBLICO.** Nada de dumps, artifacts con datos, ni
+  credenciales. Revisado el 30/07/2026: el historial de git está limpio
+  (busqué la clave de Brevo, el token de Twilio, la de WeatherAPI, la
+  contraseña de la base y la de Anthropic en todos los commits — cero
+  coincidencias; el único `sk-ant-api03-...` es un placeholder de
+  plantilla). El pendiente de "credenciales expuestas" no viene de git.
+- **Supabase plan Free no hace backups.** El panel dice "No backups".
+  De eso se ocupa `.github/workflows/backup_db.yml` desde el 30/07/2026.
+- **El servidor es Postgres 17.6**, así que `pg_dump` tiene que ser 17 o
+  más nuevo. `ubuntu-latest` trae el 16 y falla, por eso el workflow
+  instala `postgresql-client-17` del repo oficial.
+- **La base pesa 12 MB** (18 tablas; las más grandes son
+  `alertas_enviadas` con 200 kB y `alertas_whatsapp_enviadas` con 136 kB).
+  Por eso el dump entra cómodo en un adjunto de email.
 
 - **El stock NO es un saldo de depósito, es un balance acumulado.**
   `kg_restantes = max(0, todas_las_entregas − consumo_teórico_desde_la_primera_entrega)`.
@@ -113,6 +130,60 @@ clientes: es su centro de comando.
   base SQLite temporal.
 
 ## Historial de sesiones
+
+### 30/07/2026 — Backup de la base, y el camino a la facturación
+
+**Backup (hecho).** La base de producción no tenía ningún respaldo: el
+único backup del repo es del 07/07 y es de la era SQLite
+(`cattle_tracker.db` + credenciales), con un `restaurar_backup.sh` que
+apunta a `data/cattle_tracker.db`. Desde la migración a Supabase habían
+pasado 23 días sin respaldo en ningún lado.
+
+  - `scripts/backup_db.py`: `pg_dump -Fc`, **verificación**, y envío por
+    email al admin reusando la config SMTP existente (cero credenciales
+    nuevas). La verificación es el punto: lista el dump con
+    `pg_restore -l` y exige que aparezcan `clientes`, `lotes`, `dietas`,
+    `pesadas` y `entregas_producto`. Un dump truncado también existe y
+    también pesa bytes; sin esto el cron podría escribir basura durante
+    meses sin que nadie se enterara.
+  - `.github/workflows/backup_db.yml`: diario 03:00 AR, con un paso que
+    manda mail si el backup falla. **No sube artifacts ni commitea el
+    dump: el repo es público.**
+  - Implementado `attachments=` en `enviar_email`. El docstring del
+    módulo lo documentaba desde siempre pero el parámetro no existía:
+    llamarlo tiraba `TypeError`.
+  - Probado de punta a punta contra un Postgres local: dump válido OK,
+    dump truncado rechazado, archivo vacío rechazado, dump sin la tabla
+    `pesadas` rechazado nombrándola, y el adjunto verificado dentro del
+    MIME.
+
+**Facturación (relevado, sin implementar).** El ERP comercial es una SPA
+en Netlify (`spectacular-paletas-150f49.netlify.app`) con backend en un
+**segundo proyecto Supabase**, `srluebpighcafbgxbuwy`. No es FastAPI:
+esa nota estaba mal.
+
+  - Esquema: `comprobantes`, `clientes`, `productos`, `movimientos`,
+    `pedidos`, `zonas`, `app_config` — todas con la misma forma
+    (`id`, `user_id`, `payload jsonb`, `updated_at`). Todo el contenido
+    vive en `payload`, que siendo jsonb se consulta con SQL normal.
+  - `facturas_pub` (`id`, `data jsonb`) es la única tabla legible con la
+    key pública, y tiene **solo las facturas publicadas a mano** (7 al
+    30/07). No es el archivo.
+  - En `comprobantes` hay **24 facturas, desde el 13/04/2026**. Lo
+    anterior quedó en Dux. Los renglones están en
+    `payload->'items'` como `{cant, desc, unidad, precio}`, con `unidad`
+    tipo `"BOLSA 30 KG"` — o sea kg calculables. `payload->>'clienteId'`
+    apunta a `clientes.id`, y ahí está el `cuit`.
+  - El puente con esta app es el **CUIT**, que hay que agregar a
+    `clientes` (hoy no existe). Confirmado que hace falta: "Ezequiel
+    Pezzola" y "Pedro Manuel Pezzola" son dos CUIT distintos
+    (20271032553 y 23121852969) pero por nombre se confunden.
+  - Ojo al importar: en una misma factura conviven `FIBROTER X 30 KG` y
+    `CONCENTRADO PARRILLEROS X 25 KG`. Solo deben generar entrega los
+    productos que están en la dieta del lote. Y hay clientes sin CUIT
+    (LECCEA, MALATESTA, PEIRETTI) y uno con CUIT inválido de 6 dígitos
+    (MOYA CLAUDIO, `554445`): el matcher tiene que validar 11 dígitos y
+    avisar, no tragárselos.
 
 ### 29/07/2026 (noche) — Falsos positivos de stock a clientes
 
