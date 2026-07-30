@@ -70,6 +70,19 @@ clientes: es su centro de comando.
 
 ## Cosas que conviene saber antes de tocar
 
+- **Streamlit Cloud NO está auto-deployando.** La app quedó apuntando al
+  nombre viejo del repo (`determinacion-de-pesos-y-conteo-bovinos-...`)
+  y desde el rename del 29/07 no toma los commits nuevos. Un *Reboot app*
+  desde share.streamlit.io sí baja el código (el pull funciona porque
+  GitHub redirige), pero hay que hacerlo a mano después de cada push.
+  Ojo: esto solo afecta la pantalla. Los crons de GitHub Actions hacen
+  checkout en cada corrida, así que las alertas siempre corren el código
+  nuevo.
+- **Formularios en páginas pesadas.** Cada widget suelto dispara un rerun
+  completo, y la ficha del cliente recalcula el stock de todos los lotes
+  proyectando día por día. Los campos que se llenan de a varios van
+  dentro de `st.form` o la pantalla se congela entre campo y campo.
+
 - **Cualquier `.yml` dentro de `.github/workflows/` se ejecuta**, tenga
   el nombre que tenga. El guión bajo no lo exceptúa. `_env.yml` era solo
   comentarios y fallaba en cada push, dejando Actions en rojo de forma

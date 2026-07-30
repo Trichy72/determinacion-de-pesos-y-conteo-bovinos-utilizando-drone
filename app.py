@@ -9682,33 +9682,43 @@ with tab_clientes:
                                         "la dieta."
                                     )
                                 else:
-                                    _prod_sel = _c2.selectbox(
-                                        "Producto", _prods_corte,
-                                        key="corte_producto",
-                                    )
-                                    _c3, _c4 = st.columns(2)
-                                    _fecha_corte = _c3.date_input(
-                                        "Fecha del recuento",
-                                        key="corte_fecha",
-                                    )
-                                    _kg_corte = _c4.number_input(
-                                        "Kg en existencia a esa fecha",
-                                        min_value=0.0, step=10.0,
-                                        key="corte_kg",
-                                        help="Los kg físicos que hay en "
-                                             "el campo. Puede ser 0.",
-                                    )
-                                    _notas_corte = st.text_input(
-                                        "Nota (opcional)",
-                                        key="corte_notas",
-                                        placeholder="Ej: recuento con "
-                                                    "el encargado",
-                                    )
-                                    if st.button(
-                                        "Fijar stock a esa fecha",
-                                        key="corte_guardar",
-                                        type="primary",
-                                    ):
+                                    # Los campos van dentro de un form a
+                                    # propósito. Sueltos, cada uno dispara
+                                    # un rerun completo de la página, y esta
+                                    # página recalcula el stock de todos los
+                                    # lotes (proyección día por día): se
+                                    # congelaba entre campo y campo. Dentro
+                                    # del form solo recalcula al enviar.
+                                    with st.form("form_corte_stock"):
+                                        _c2b, _c3 = st.columns(2)
+                                        _prod_sel = _c2b.selectbox(
+                                            "Producto", _prods_corte,
+                                            key="corte_producto",
+                                        )
+                                        _fecha_corte = _c3.date_input(
+                                            "Fecha del recuento",
+                                            key="corte_fecha",
+                                        )
+                                        _kg_corte = st.number_input(
+                                            "Kg en existencia a esa fecha",
+                                            min_value=0.0, step=10.0,
+                                            key="corte_kg",
+                                            help="Los kg físicos que hay en "
+                                                 "el campo. Puede ser 0.",
+                                        )
+                                        _notas_corte = st.text_input(
+                                            "Nota (opcional)",
+                                            key="corte_notas",
+                                            placeholder="Ej: recuento con "
+                                                        "el encargado",
+                                        )
+                                        _guardar_corte = (
+                                            st.form_submit_button(
+                                                "Fijar stock a esa fecha",
+                                                type="primary",
+                                            )
+                                        )
+                                    if _guardar_corte:
                                         try:
                                             db.crear_ajuste_stock(
                                                 cli_para_editar,
