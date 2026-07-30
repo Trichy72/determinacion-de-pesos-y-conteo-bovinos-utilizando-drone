@@ -70,6 +70,18 @@ clientes: es su centro de comando.
 
 ## Cosas que conviene saber antes de tocar
 
+- **DECISIÓN DE MODELO (30/07/2026): el stock de producto se lleva por
+  CLIENTE + PRODUCTO, no por lote.** Mauricio lo confirmó preguntándole
+  cómo es en el campo: *"todo se junta en un mismo lado y se reparte a
+  los distintos lotes según la ración preparada para ese lote"*. O sea
+  que el stock por lote era una división que en la realidad no existe.
+  Los lotes y las dietas SE QUEDAN: son los que dan el consumo diario;
+  el consumo de un producto es la suma de los lotes que lo comen. La
+  consecuencia importante: la importación desde facturación no tiene que
+  adivinar a qué lote va cada renglón de factura, porque no hace falta
+  saberlo. Si alguna vez se vuelve a poner stock por lote, hay que poder
+  responder de dónde sale el reparto — y hoy no sale de ningún lado.
+
 - **El cálculo de stock ya NO consulta por día.** `contexto_lote()` en
   `stock_producto.py` trae lote, dietas y movimientos una vez, y
   `calcular_consumo_diario_kg(..., ctx=...)` los reusa. Si tocás ese
