@@ -1605,6 +1605,50 @@ def listar_movimientos_lote(
 
 
 @_cache_lectura
+def contexto_cantidad_lote(lote_id: int) -> Dict:
+    """Trae en UNA consulta todo lo necesario para calcular la cantidad
+    vigente del lote a cualquier fecha, sin volver a la base.
+
+    Existe por una razón medida: el cálculo de stock acumula consumo día
+    por día, y preguntaba la cantidad de animales por cada día. Un lote
+    de 120 días con proyección disparaba ~486 consultas solo por esto.
+    Con el contexto son 2, y el resto se resuelve en memoria.
+    """
+    with get_conn() as conn:
+        lote = conn.execute(
+            "SELECT cantidad_inicial FROM lotes WHERE id = ?",
+            (lote_id,),
+        ).fetchone()
+        if not lote:
+            return {"base": 0, "movs": []}
+        rows = conn.execute(
+            "SELECT tipo, cantidad, fecha FROM movimientos "
+            "WHERE lote_id = ?",
+            (lote_id,),
+        ).fetchall()
+    return {
+        "base": int(lote["cantidad_inicial"] or 0),
+        "movs": [
+            (r["tipo"], int(r["cantidad"] or 0), r["fecha"])
+            for r in rows
+        ],
+    }
+
+
+def cantidad_vigente_desde_contexto(
+    ctx: Dict, fecha: Optional[str] = None,
+) -> int:
+    """Misma cuenta que `cantidad_vigente_lote`, pero sobre un contexto
+    ya traído. Es la ÚNICA implementación de la fórmula: la versión que
+    consulta la base la usa a ella, así que no pueden divergir."""
+    delta = 0
+    for tipo, cant, f in ctx.get("movs", ()):
+        if fecha is not None and (f or "") > fecha:
+            continue
+        delta += MOVIMIENTO_TIPOS.get(tipo, 0) * cant
+    return max(0, int(ctx.get("base", 0)) + delta)
+
+
 def cantidad_vigente_lote(
     lote_id: int, fecha: Optional[str] = None,
 ) -> int:
@@ -1618,26 +1662,9 @@ def cantidad_vigente_lote(
     Returns:
         int con la cantidad vigente. Nunca menor a 0.
     """
-    with get_conn() as conn:
-        lote = conn.execute(
-            "SELECT cantidad_inicial FROM lotes WHERE id = ?",
-            (lote_id,),
-        ).fetchone()
-        if not lote:
-            return 0
-        base = int(lote["cantidad_inicial"] or 0)
-
-        q = ("SELECT tipo, cantidad FROM movimientos "
-             "WHERE lote_id = ? "
-             "AND (? IS NULL OR fecha <= ?)")
-        rows = conn.execute(q, (lote_id, fecha, fecha)).fetchall()
-
-    delta = 0
-    for r in rows:
-        signo = MOVIMIENTO_TIPOS.get(r["tipo"], 0)
-        delta += signo * int(r["cantidad"] or 0)
-
-    return max(0, base + delta)
+    return cantidad_vigente_desde_contexto(
+        contexto_cantidad_lote(lote_id), fecha,
+    )
 
 
 @_invalida_cache

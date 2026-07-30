@@ -70,6 +70,15 @@ clientes: es su centro de comando.
 
 ## Cosas que conviene saber antes de tocar
 
+- **El cálculo de stock ya NO consulta por día.** `contexto_lote()` en
+  `stock_producto.py` trae lote, dietas y movimientos una vez, y
+  `calcular_consumo_diario_kg(..., ctx=...)` los reusa. Si tocás ese
+  camino, pasá el `ctx`: sin él vuelve a pedirle todo a la base en cada
+  día simulado. Medido: 4.116 consultas → 26 (99,4% menos), resultados
+  idénticos. La fórmula de cantidad vigente tiene UNA sola
+  implementación (`cantidad_vigente_desde_contexto`), y la versión que
+  consulta la base la llama a ella, así que no pueden divergir.
+
 - **Streamlit Cloud NO está auto-deployando.** La app quedó apuntando al
   nombre viejo del repo (`determinacion-de-pesos-y-conteo-bovinos-...`)
   y desde el rename del 29/07 no toma los commits nuevos. Un *Reboot app*
@@ -171,6 +180,28 @@ clientes: es su centro de comando.
   base SQLite temporal.
 
 ## Historial de sesiones
+
+### 30/07/2026 (tarde 4) — Diagnóstico de lentitud y arreglo del cálculo
+
+Mauricio pidió un sistema ágil y rápido. Medí antes de opinar.
+
+  - **`app.py` tiene 16.075 líneas y 10.796 (67%) se re-ejecutan en cada
+    click** — eso es el modelo de Streamlit, no es optimizable.
+  - **Un cálculo de stock disparaba 800 a 1.500 consultas SQL.** A la
+    escala de hoy (5 clientes), dibujar la pantalla eran 4.872 consultas.
+    Causa: el consumo se acumula y se proyecta día por día, y por cada
+    día se volvía a pedir lote, dietas y cantidad de animales.
+  - **El dashboard rápido es rápido porque está viejo:** lee un blob
+    precalculado, y el cron declara 5 minutos pero GitHub Actions no
+    cumple (vi datos de 23, 36 y 86 minutos). El propio código ya lo
+    admite: *"6 horas de tolerancia: GitHub Actions NO corre el cron"*.
+    O sea, el sistema ofrecía rápido **o** actual, nunca las dos.
+  - **Arreglado:** contexto traído una vez. **4.116 → 26 consultas
+    (99,4% menos)**, de ~140 ms a ~3 ms por cálculo, con resultados
+    idénticos en 8 escenarios (incluidos planes de adaptación de dos
+    fases y lotes con bajas) y en 5 fechas de cantidad vigente.
+  - **Pendiente de decidir con datos:** si el cron de precálculo sigue
+    haciendo falta. Probablemente no, y sacarlo devolvería datos en vivo.
 
 ### 30/07/2026 (tarde 3) — Backup verificado en producción
 
