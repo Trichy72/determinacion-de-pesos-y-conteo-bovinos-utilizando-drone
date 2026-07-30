@@ -193,6 +193,49 @@ clientes: es su centro de comando.
 
 ## Historial de sesiones
 
+### 30/07/2026 (noche) — El consumo por animal está mal cargado, y además NO debería ser fijo
+
+Mauricio validó, uno por uno, los kg de producto por animal por día que
+el sistema está usando. Dos están mal para el lado peligroso.
+
+| Cliente | Sistema | Real (Mauricio) | Desvío |
+| --- | --- | --- | --- |
+| Ezequiel Pezzola | 0,86 | **1,10** | sistema 22% BAJO |
+| Jackie Graves | 1,06 | **0,62** | sistema 71% ALTO |
+| Mario Salvadori | 1,33 | **1,28** | 4%, aceptable |
+| Miguel Bergondi | 0,80 | **0,98** | sistema 18% BAJO |
+| Pedro Manuel Pezzola | 0,79 | **0,75** | 5%, aceptable |
+
+"Bajo" es el lado peligroso: el sistema cree que comen menos de lo que
+comen, promete más días de los que hay, y avisa tarde. La realidad lo
+confirmó el mismo día: decía 302 kg de Fibroter en lo de Ezequiel y en
+el campo había 90 (3 bolsas). Con el valor correcto, los 540 kg de hoy
+no son 125 días sino ~98.
+
+**Y el hallazgo de fondo, dicho por Mauricio: "por ahí tomás la
+evolución del peso".** El consumo hoy es un número FIJO. No lo es: el
+animal engorda, su consumo de materia seca sube, y el consumo del
+producto sube con él. Ningún valor único puede ser correcto — sirve el
+primer día y se desvía solo a partir de ahí. Los porcentajes de
+inclusión además varían por producto, categoría, insumos y objetivo
+(recría vs engorde).
+
+Esto conecta el dron con la gestión: el dron mide pesos, los pesos deben
+mover la ración, la ración el consumo, y el consumo el stock y las
+alertas. Hoy esa cadena está cortada — se mide peso por un lado y se
+calcula stock con un número congelado por el otro. Arreglar esto es lo
+que convierte tres apps sueltas en un sistema.
+
+**Pedido de Mauricio (30/07 noche), con fecha límite LUNES:**
+  1. Corregir los errores de cálculo (los 5 valores + consumo por peso).
+  2. Más rápido y ágil.
+  3. Alertas a clientes: falta de producto por email Y WhatsApp; la
+     climática ya funciona; y una nueva de cambio de ración con las
+     indicaciones.
+  4. Herramienta de análisis de precios de la competencia.
+  5. Herramienta de negocio de engorde: hasta qué precio comprar y
+     vender (se habló por chat en el celular, falta recuperar ese hilo).
+
 ### 30/07/2026 (tarde 4) — Diagnóstico de lentitud y arreglo del cálculo
 
 Mauricio pidió un sistema ágil y rápido. Medí antes de opinar.
