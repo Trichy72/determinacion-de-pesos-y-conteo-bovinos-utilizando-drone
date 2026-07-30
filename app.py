@@ -8706,6 +8706,23 @@ with tab_clientes:
             with st.form("nuevo_cliente", clear_on_submit=False):
                 c_nombre = st.text_input("Nombre / razón social *",
                                           key="ncl_nombre")
+                c_cuit = st.text_input(
+                    "CUIT", key="ncl_cuit",
+                    placeholder="20-27103255-3",
+                    help="Para cruzar con el sistema de facturación. Se puede escribir con guiones o sin: se guarda normalizado.",
+                )
+                if c_cuit and c_cuit.strip():
+                    if db.cuit_valido(c_cuit):
+                        st.caption(
+                            f"✅ CUIT válido: {db.formatear_cuit(c_cuit)}"
+                        )
+                    else:
+                        st.caption(
+                            "⚠️ Ese CUIT no pasa el dígito verificador. "
+                            "Revisalo — un CUIT mal cargado hace que el "
+                            "cruce con facturación una clientes que no "
+                            "corresponden."
+                        )
                 c_estab = st.text_input("Establecimiento", key="ncl_estab")
                 c_localidad = st.text_input(
                     "Localidad / provincia", key="ncl_loc",
@@ -8795,6 +8812,7 @@ with tab_clientes:
                                     whatsapp=c_whatsapp,
                                     alertas_whatsapp_activas=int(
                                         c_wa_on),
+                                    cuit=c_cuit,
                                 )
                                 if lat_sel != 0 or lon_sel != 0:
                                     db.actualizar_cliente(
@@ -9041,6 +9059,22 @@ with tab_clientes:
                             "Recibir alertas críticas por WhatsApp",
                             value=bool(c_data.get("alertas_whatsapp_activas", 1)),
                         )
+                        e_cuit = st.text_input(
+                            "CUIT",
+                            db.formatear_cuit(c_data.get("cuit")),
+                            help="Para cruzar con el sistema de facturación. Se puede escribir con guiones o sin: se guarda normalizado.",
+                        )
+                        if e_cuit and e_cuit.strip():
+                            if db.cuit_valido(e_cuit):
+                                st.caption(
+                                    f"✅ CUIT válido: "
+                                    f"{db.formatear_cuit(e_cuit)}"
+                                )
+                            else:
+                                st.caption(
+                                    "⚠️ Ese CUIT no pasa el dígito "
+                                    "verificador. Revisalo."
+                                )
                         e_notas = st.text_area("Notas",
                                                 c_data.get("notas") or "")
 
@@ -9062,6 +9096,7 @@ with tab_clientes:
                             campos = dict(
                                 nombre=e_nombre, establecimiento=e_estab,
                                 localidad=e_loc, contacto=e_cont, notas=e_notas,
+                                cuit=db.normalizar_cuit(e_cuit),
                                 email=e_email,
                                 alertas_email_activas=int(e_alertas_on),
                                 whatsapp=e_whatsapp,

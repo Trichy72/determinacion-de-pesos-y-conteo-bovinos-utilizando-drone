@@ -87,6 +87,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS clientes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL UNIQUE,
+    cuit TEXT,
     contacto TEXT,
     establecimiento TEXT,
     localidad TEXT,
@@ -915,15 +916,19 @@ def crear_cliente(nombre: str, contacto: str = "", establecimiento: str = "",
                   localidad: str = "", notas: str = "",
                   email: str = "", alertas_email_activas: int = 1,
                   whatsapp: str = "",
-                  alertas_whatsapp_activas: int = 1) -> int:
+                  alertas_whatsapp_activas: int = 1,
+                  cuit: str = "") -> int:
+    _ensure_columna("clientes", "cuit", "TEXT")
     with get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO clientes (nombre, contacto, establecimiento, localidad, "
-            "notas, email, alertas_email_activas, whatsapp, alertas_whatsapp_activas) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "notas, email, alertas_email_activas, whatsapp, "
+            "alertas_whatsapp_activas, cuit) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (nombre, contacto, establecimiento, localidad, notas,
              email, alertas_email_activas,
-             whatsapp, alertas_whatsapp_activas),
+             whatsapp, alertas_whatsapp_activas,
+             normalizar_cuit(cuit) or ""),
         )
         return cur.lastrowid
 
@@ -3666,3 +3671,113 @@ def borrar_ajuste_stock(ajuste_id: int) -> None:
         conn.execute(
             "DELETE FROM ajustes_stock WHERE id = ?", (ajuste_id,),
         )
+
+
+# =====================================================================
+# COLUMNAS AGREGADAS DESPUES (migracion perezosa, portable)
+# =====================================================================
+# `init_db` sale temprano cuando la base es Postgres (el SCHEMA usa
+# sintaxis SQLite-only), asi que las migraciones de ahi no corren en la
+# nube. Este helper agrega una columna si falta, consultando el catalogo
+# que corresponda a cada motor.
+
+_COLS_CHEQUEADAS: set = set()
+
+
+def _ensure_columna(tabla: str, columna: str, tipo_sql: str) -> None:
+    """Agrega `columna` a `tabla` si no existe. Idempotente y silenciosa."""
+    clave = f"{tabla}.{columna}"
+    if clave in _COLS_CHEQUEADAS:
+        return
+    try:
+        with get_conn() as conn:
+            if _usando_postgres():
+                rows = conn.execute(
+                    """SELECT column_name AS name
+                       FROM information_schema.columns
+                       WHERE table_schema = 'public' AND table_name = ?""",
+                    (tabla,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"PRAGMA table_info({tabla})"
+                ).fetchall()
+            existentes = {r["name"] for r in rows}
+            if columna not in existentes:
+                conn.execute(
+                    f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo_sql}"
+                )
+        _COLS_CHEQUEADAS.add(clave)
+    except Exception:
+        # Si no se pudo (permisos, conexion), la app sigue: las lecturas
+        # de esa columna van a devolver vacio y nada mas.
+        pass
+
+
+# =====================================================================
+# CUIT
+# =====================================================================
+
+def normalizar_cuit(valor: Optional[str]) -> str:
+    """Deja solo los digitos. Devuelve "" si no hay nada usable.
+
+    No valida: para eso esta `cuit_valido`. Se usa al guardar, para que
+    "20-27103255-3" y "20271032553" queden iguales en la base y el cruce
+    con el sistema de facturacion no falle por un guion.
+    """
+    if not valor:
+        return ""
+    return "".join(c for c in str(valor) if c.isdigit())
+
+
+def cuit_valido(valor: Optional[str]) -> bool:
+    """¿Es un CUIT/CUIL argentino valido? Chequea largo Y digito
+    verificador (modulo 11).
+
+    Por que el digito verificador y no solo el largo: en el sistema de
+    facturacion hay clientes con cosas como "554445" en el campo CUIT.
+    Un cruce por CUIT con datos asi une clientes que no corresponden, y
+    en un sistema que manda mails automaticos eso es peor que no cruzar
+    nada. Mejor rechazarlo al cargarlo.
+    """
+    d = normalizar_cuit(valor)
+    if len(d) != 11:
+        return False
+    pesos = (5, 4, 3, 2, 7, 6, 5, 4, 3, 2)
+    total = sum(int(d[i]) * pesos[i] for i in range(10))
+    resto = total % 11
+    verif = 11 - resto
+    if verif == 11:
+        verif = 0
+    elif verif == 10:
+        return False       # CUIT invalido por definicion
+    return verif == int(d[10])
+
+
+def formatear_cuit(valor: Optional[str]) -> str:
+    """20271032553 -> 20-27103255-3. Si no tiene 11 digitos, lo devuelve
+    tal como vino."""
+    d = normalizar_cuit(valor)
+    if len(d) != 11:
+        return d or ""
+    return f"{d[:2]}-{d[2:10]}-{d[10]}"
+
+
+@_cache_lectura
+def buscar_cliente_por_cuit(cuit: Optional[str]) -> Optional[Dict]:
+    """Devuelve el cliente con ese CUIT, o None. Compara normalizado,
+    asi que da igual como se haya cargado (con guiones o sin)."""
+    d = normalizar_cuit(cuit)
+    if not d:
+        return None
+    _ensure_columna("clientes", "cuit", "TEXT")
+    try:
+        with get_conn() as conn:
+            rows = conn.execute("SELECT * FROM clientes").fetchall()
+    except Exception:
+        return None
+    for r in rows:
+        c = dict(r)
+        if normalizar_cuit(c.get("cuit")) == d:
+            return c
+    return None

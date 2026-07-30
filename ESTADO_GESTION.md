@@ -70,6 +70,18 @@ clientes: es su centro de comando.
 
 ## Cosas que conviene saber antes de tocar
 
+- **CUIT en clientes.** `normalizar_cuit` (deja solo dígitos),
+  `cuit_valido` (largo **y** dígito verificador módulo 11),
+  `formatear_cuit` y `buscar_cliente_por_cuit`, en `src/database.py`. Se
+  guarda normalizado, así que da igual si se carga con guiones. La
+  validación del dígito verificador no es adorno: en el sistema de
+  facturación hay un cliente con `554445` en el campo CUIT, y cruzar por
+  CUIT con datos así une clientes que no corresponden.
+- **`_ensure_columna(tabla, columna, tipo)`** agrega columnas de forma
+  perezosa y portable (`information_schema` en Postgres,
+  `PRAGMA table_info` en SQLite). Es la vía para migrar la nube, porque
+  `init_db` sale temprano cuando la base es Postgres.
+
 - **Fecha de corte de stock.** `ajustes_stock` (cliente, lote, producto,
   fecha, kg) le pone un piso al cálculo: con un ajuste vigente, el stock
   arranca de los kg declarados, suma solo las entregas POSTERIORES y
@@ -139,6 +151,21 @@ clientes: es su centro de comando.
   base SQLite temporal.
 
 ## Historial de sesiones
+
+### 30/07/2026 (tarde 2) — CUIT en clientes
+
+Primera pieza de la integración con facturación, y la única que no
+depende de credenciales ni de nada externo.
+
+  - Columna `cuit` en `clientes`, con `_ensure_columna` para que migre
+    sola en las dos bases. Probado sobre una SQLite vieja sin la columna
+    (migra al primer uso y no toca los clientes existentes) y la rama
+    Postgres contra un Postgres local.
+  - Validación con dígito verificador. Verificada contra los CUIT reales
+    del sistema de facturación: los 7 válidos pasan, el `554445` de
+    Moya se rechaza, y cambiarle un dígito al de Pezzola también.
+  - Campo en el alta y en la edición de cliente, con aviso en vivo si el
+    CUIT no cierra.
 
 ### 30/07/2026 (tarde) — Fecha de corte de stock
 
