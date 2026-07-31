@@ -7,25 +7,23 @@ Cubre el cambio del 31/07/2026: el consumo diario de producto sale de
 Uso:   python3 scripts/test_consumo_tal_cual.py
 Salida: una línea por caso y un resumen. Exit code 1 si algo falla.
 """
-import os
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
-RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(RAIZ))
+# Tiene que ir ANTES de importar src.database: fuerza SQLite temporal y
+# aborta si algo resuelve una conexión a Postgres. Ver el docstring de
+# _sandbox_db.py — el 31/07/2026 estos tests escribieron en producción.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _sandbox_db import base_temporal, verificar_sqlite   # noqa: E402
 
-# Base temporal: sin DATABASE_URL el backend cae a SQLite local.
-os.environ.pop("DATABASE_URL", None)
-TMP = Path(tempfile.mkdtemp(prefix="test_consumo_"))
-os.chdir(TMP)
-(TMP / "data").mkdir(exist_ok=True)
+TMP = base_temporal("test_consumo_")
 
 from src import database as db          # noqa: E402
 from src import stock_producto as sp    # noqa: E402
 
 db.init_db()
+verificar_sqlite(db)
 
 FALLAS = []
 CASOS = 0

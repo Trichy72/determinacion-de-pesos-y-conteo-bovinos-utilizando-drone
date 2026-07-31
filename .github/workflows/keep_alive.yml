@@ -46,7 +46,10 @@ jobs:
         # anterior) es lo importante. curl con --max-redirs alto porque
         # Streamlit dormida entra en loop de redirects (error 47).
         run: |
-          URL="https://determinacion-de-pesos-y-conteo-bovinos-utilizando-drone-9s6v3.streamlit.app/"
+          URL="https://hms-gestion-ganadera.streamlit.app/"
           CODE=$(curl -sS -o /dev/null -w "%{http_code}" -L --max-redirs 100 --max-time 90 "$URL" || echo "err")
           echo "Ping HTTP $CODE - $(date -u)"
+          if [ "$CODE" != "200" ]; then
+            echo "::warning title=Ping sin respuesta::La app respondio '$CODE' en $URL. Si se repite, revisar que la URL siga siendo la correcta."
+          fi
           exit 0

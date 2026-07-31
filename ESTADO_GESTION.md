@@ -60,7 +60,8 @@ clientes: es su centro de comando.
 | — | Enchufar `factor_escala_consumo_pv` en el camino del stock | Existe y lo usa la carga de silo, pero `calcular_consumo_diario_kg` no. Explica el 3-8% que falta |
 | — | Descontar del ADPV objetivo la pérdida por frío ya calculada | `impacto_productivo` la calcula y `impactos_lote` la guarda, pero la proyección de peso sigue usando el objetivo plano |
 | — | Sumar el plus de mantenimiento por frío al consumo | `dmi.py` lo calcula. Es el efecto opuesto al anterior: hay que aplicar los dos o ninguno |
-| — | Commitear y pushear el fix de `SMTP_BCC_CLIENTES` | El bug sigue vivo en producción hasta el push |
+| — | **Ver andando el gráfico de evolución del peso** | Nunca se renderizó: se escribió en un entorno sin altair. Mirarlo antes de darlo por bueno |
+| — | Commitear y pushear el gráfico (`serie_peso.py` + `app.py`) | Sin pushear al cierre del 31/07 |
 | — | `CARGA_BASE_URL` apunta a un túnel ngrok free de la Mac | Bloqueante real del 482: la URL muere al reiniciar ngrok |
 | — | El dashboard sigue mostrando "Reponer HOY" con historial incompleto | `dashboard_precompute.py:129` solo excluye `sin_entregas` |
 | — | Umbrales de stock configurables desde Configuración | Hoy están escritos a mano en 4 lugares con valores distintos |
@@ -75,6 +76,38 @@ clientes: es su centro de comando.
 | — | Crear Roxdan y La Esperanza Argentina como clientes | Para poder guardar las recorridas del drone en ficha |
 
 ## Cosas que conviene saber antes de tocar
+
+- **NUNCA escribir un test que cree datos sin pasar por
+  `scripts/_sandbox_db.py`.** El 31/07/2026 dos tests escribieron en la
+  base de PRODUCCIÓN y le dejaron 28 clientes de prueba, cinco de ellos
+  duplicando el nombre de clientes reales. Hacían
+  `os.environ.pop("DATABASE_URL")` dando por sentado que sin esa
+  variable el backend cae a SQLite. **No es así:**
+  `db_backend._get_database_url()` (línea 45), cuando no encuentra la
+  variable de entorno, **lee el `.env` del proyecto directamente**. El
+  pop no sirve de nada. `_sandbox_db.base_temporal()` interviene el
+  resolutor y **después verifica** que la conexión no sea Postgres,
+  abortando el proceso si lo es. Dos lecciones que costaron caro:
+  sacar la variable de entorno NO alcanza, y **un test que escribe en
+  producción no avisa: pasa en verde**. Los 30/30 y 22/22 de esa
+  corrida eran correctos y destructivos al mismo tiempo.
+- **La tabla `clientes` en Postgres NO tiene el `UNIQUE` sobre
+  `nombre`** que sí declara el DDL de SQLite (porque `init_db` sale
+  temprano en Postgres y el esquema de la nube se creó por otro
+  camino). Por eso se pudieron crear cinco "Ezequiel Pezzola". Si
+  alguna vez se cruza por nombre, tenerlo presente: el nombre no es
+  clave. El puente bueno es el CUIT.
+- **La limpieza quedó en `scripts/limpiar_datos_de_test.py`**, por si
+  vuelve a hacer falta el patrón: lista primero, borra solo con
+  `--confirmar`, y protege por `fecha_alta` — nunca por patrón de
+  nombre, que se llevaría puesto un cliente real homónimo.
+- **Streamlit Cloud NO deja cambiar el repo de una app existente.**
+  Revisado en pantalla el 31/07: App settings solo tiene General
+  (subdominio y versión de Python), Sharing y Secrets. Para re-apuntar
+  la app al nombre nuevo habría que borrarla y recrearla, o sea volver
+  a cargar los 22 secrets a mano. Conclusión: **el reboot manual
+  después de cada push se queda**, es el costo de haber renombrado el
+  repo. El subdominio ya es el correcto y corre Python 3.14.
 
 - **DECISIÓN DE MODELO (31/07/2026): el consumo diario de producto sale
   de `kg_tal_cual` de la dieta, NO de `DMI × pct_ms / 100`.** La fórmula
@@ -327,7 +360,64 @@ tienen. Buscando dónde entra, apareció un bug peor.
     Antes de enchufar el escalado en el camino del stock conviene
     correr un diagnóstico de pesadas reales contra peso proyectado.
 
-  - **Sin pushear todavía:** en producción el cálculo viejo sigue vivo.
+**Pusheado y desplegado.** Commit `73a629e`, push por GitHub Desktop y
+reboot manual en share.streamlit.io (el auto-deploy sigue roto). La app
+levantó bien con el cálculo nuevo.
+
+**Tercera parte — el gráfico de evolución del peso (SIN PUSHEAR).**
+
+  - `src/serie_peso.py` (nuevo, 43 casos de test en
+    `scripts/test_serie_peso.py`) arma tres lecturas del mismo lote:
+    proyección por ADPV objetivo, proyección ajustada por clima
+    descontando lo que ya calculó `impacto_productivo`, y las pesadas
+    reales de balanza y drone.
+  - **La de clima es una BANDA, no una línea:** el impacto se estima en
+    rango mín-máx y una línea sola aparentaría precisión que no hay.
+  - **Eventos superpuestos: máximo, no suma** (dos registros del mismo
+    frente frío describen el mismo evento). Un `confirmado` le gana a
+    un `proyectado` del mismo día aunque su pérdida sea menor.
+  - **La pérdida nunca hace bajar la curva:** el frío frena el engorde;
+    que el animal pierda peso lo tiene que decir una pesada.
+  - **`cobertura_clima` es la pieza importante:** qué % de los días del
+    período tiene impacto registrado. Sin eso el gráfico miente por
+    omisión — con 2 eventos en 60 días la curva de clima se pega a la
+    del objetivo por FALTA DE DATOS, no porque no haya hecho frío, y
+    quien mira concluye lo contrario. Abajo de 25% `resumen_desvio` lo
+    dice con todas las letras.
+  - En `app.py` reemplaza el gráfico de matplotlib de "Evolución de
+    peso promedio" (que solo dibujaba las pesadas) por uno de altair
+    con las tres series, y agrega barras de ADG por tramo abajo de la
+    tabla de ADG. La app no usa plotly: `st.line_chart` y altair.
+  - Paleta validada con el validador del skill de dataviz. **El verde
+    de la casa quedó afuera del gráfico a propósito: verde y naranja
+    no se distinguen en protanopía** (falla la separación CVD). Los
+    cuatro colores son azul `#2a78d6`, naranja `#eb6834`, aqua
+    `#1baf7a` y violeta `#4a3aa7`.
+  - **Falta verlo andando:** el gráfico nunca se renderizó, porque el
+    entorno donde se escribió no podía instalar altair. Antes de darlo
+    por bueno hay que abrir la ficha de un lote y mirarlo.
+
+**Cuarta parte — el incidente: los tests escribieron en producción.**
+
+  - Al abrir la app para verificar el deploy, la lista de clientes
+    mostraba "Absurda SA", "Drone SA", "EndToEnd SA"… y el header decía
+    **33 clientes / 964 animales** en vez de 5 clientes. Los tests de
+    la mañana habían corrido contra Supabase, no contra SQLite.
+  - Causa y prevención: ver el primer punto de "Cosas que conviene
+    saber". Los tres tests ahora pasan por `scripts/_sandbox_db.py`.
+  - **Nada de los datos reales se tocó.** Los tests solo crean clientes
+    nuevos y les cuelgan lotes propios. Ninguno tenía email ni WhatsApp,
+    así que tampoco salió comunicación a nadie.
+  - Limpieza hecha con `scripts/limpiar_datos_de_test.py`: 28 clientes
+    (ids 8 al 35, todos con alta 2026-07-31) borrados; los 5 reales
+    (ids 3 al 7, altas de mayo) protegidos por fecha y listados como
+    tales antes de tocar nada. Quedaron 5 clientes.
+  - El primer intento del script murió a mitad de camino por timeout de
+    conexión: pedía los conteos de a uno por cliente, unas 150 idas y
+    vueltas a Oregón. Reescrito para pedir todo de una y con reintentos.
+    **Es el mismo problema que motiva el pendiente 485 (mudar la base a
+    São Paulo)**, ahora con evidencia de que rompe cosas, no solo de que
+    molesta.
 
 ### 30/07/2026 (noche) — El consumo por animal está mal cargado, y además NO debería ser fijo
 

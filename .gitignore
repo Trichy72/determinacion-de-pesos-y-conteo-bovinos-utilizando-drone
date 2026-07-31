@@ -104,3 +104,6 @@ candidatas_limpias/
 pruebas_deteccion/
 _to_delete/
 Copia de dataset_bovinos*
+
+# Copias que deja scripts/arreglar_ping.py antes de tocar el workflow
+.github/workflows/*.antes-del-arreglo
