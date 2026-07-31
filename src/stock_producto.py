@@ -157,6 +157,28 @@ def contexto_lote(lote_id: int) -> Dict:
     }
 
 
+def _item_dieta_producto(
+    dietas: Optional[List[Dict]], producto: str,
+    fecha_referencia: Optional[str],
+) -> Tuple[Optional[Dict], Optional[Dict]]:
+    """Ubica el renglón del producto dentro de la dieta vigente.
+
+    Returns:
+        (dieta, item) — los dos en None si no hay dieta o el producto no
+        figura en su composición.
+    """
+    if not dietas:
+        return None, None
+    dieta = _dieta_vigente(dietas, fecha_referencia) or dietas[-1]
+    if not dieta:
+        return None, None
+    for item in (dieta.get("composicion") or []):
+        nombre_item = item.get("nombre") or item.get("ingrediente") or ""
+        if _mismo_producto(nombre_item, producto):
+            return dieta, item
+    return dieta, None
+
+
 def calcular_consumo_diario_kg(
     lote_id: int, producto: str,
     dmi_kg_dia_override: Optional[float] = None,
@@ -167,24 +189,45 @@ def calcular_consumo_diario_kg(
     en la fecha de referencia indicada.
 
     Fórmula:
-        consumo = DMI_animal × cantidad × pct_inclusion / 100
+        consumo = kg_tal_cual_por_animal × cantidad
+
+    **Por qué kg_tal_cual y no DMI × % inclusión.** Hasta el 31/07/2026
+    esta función hacía `DMI × cantidad × pct_ms / 100`. Eso devuelve kg
+    de MATERIA SECA, y todo lo que hay del otro lado de la resta —
+    entregas, bolsas de 30 kg, stock — está en producto TAL CUAL. Se
+    restaban unidades distintas.
+
+    Peor todavía: `consumo_ms_kg` (el DMI) y `pct_ms` no cierran con
+    `kg_tal_cual` en la mayoría de las dietas reales, porque el DMI
+    incluye forraje que la composición no lista (lotes con el rollo
+    aparte) o que figura con `pct_ms = 0` (rollo a voluntad). Medido
+    contra los 5 lotes de producción el 31/07/2026, la materia seca
+    implícita daba 217%, 177%, 112%, 111% y 88% — los cuatro primeros
+    son físicamente imposibles.
+
+    Contra los valores que Mauricio validó a campo el 30/07/2026,
+    `kg_tal_cual` se desvía entre 3% y 8%; la fórmula vieja se desviaba
+    entre −21% y +72%. Ese resto de 3-8% es el escalado por peso vivo,
+    que se resuelve aparte (ver `factor_escala_consumo_pv`, que hoy solo
+    aplica el camino de la carga de silocomedero).
 
     Si el lote tiene plan de adaptación (varias dietas con distintas
-    fechas de inicio), el % de inclusión usado corresponde a la dieta
-    vigente en `fecha_referencia` (default hoy).
+    fechas de inicio), se usa la dieta vigente en `fecha_referencia`.
 
     Args:
         lote_id: id del lote.
         producto: nombre del producto.
-        dmi_kg_dia_override: opcional, sobreescribe el DMI por animal
-            tomado de la dieta vigente. Útil si querés usar DMI
-            ajustado por clima.
+        dmi_kg_dia_override: opcional, DMI por animal ajustado (ej. por
+            clima). No reemplaza al kg_tal_cual: lo escala por
+            `override / DMI_de_la_dieta`, que es la intención original
+            (comen un x% más o menos que lo formulado).
         fecha_referencia: ISO date (YYYY-MM-DD) — la dieta vigente se
             calcula para ese día. Default: hoy.
 
     Returns:
-        Dict con kg_dia, pct_inclusion, dmi_kg, cantidad_animales,
-        fuente_dmi, fase_vigente. None si faltan datos.
+        Dict con kg_dia, kg_tal_cual_animal, pct_inclusion,
+        dmi_kg_animal, cantidad_animales, fuente_kg, fuente_dmi,
+        ms_implicita_pct, fase_vigente. None si faltan datos.
     """
     from . import database as db
     from datetime import datetime as _dt
@@ -206,37 +249,84 @@ def calcular_consumo_diario_kg(
     if cantidad <= 0:
         return None
 
-    pct = obtener_pct_inclusion_lote(
-        lote_id, producto, fecha_referencia=fecha_referencia,
-        dietas=ctx.get("dietas"),
+    dietas = ctx.get("dietas") or []
+    dieta_v, item = _item_dieta_producto(
+        dietas, producto, fecha_referencia,
     )
-    if pct is None or pct <= 0:
+    if item is None:
+        # El producto no está en la dieta vigente: no hay consumo que
+        # calcular. Mismo criterio que la versión vieja, que salía por
+        # pct None.
         return None
 
-    # DMI por animal: si hay override, usarlo; si no, sacarlo de la
-    # dieta VIGENTE en la fecha de referencia.
-    dmi_animal = dmi_kg_dia_override
-    fuente_dmi = "override"
-    fase_vigente = None
-    if dmi_animal is None:
-        dietas = ctx.get("dietas") or []
-        dieta_v = _dieta_vigente(dietas, fecha_referencia) or (
-            dietas[-1] if dietas else None
+    fase_vigente = (dieta_v.get("observaciones") or "") if dieta_v else ""
+    try:
+        pct = float(item.get("pct_ms") or 0)
+    except (TypeError, ValueError):
+        pct = 0.0
+    try:
+        kg_tc_animal = float(item.get("kg_tal_cual") or 0)
+    except (TypeError, ValueError):
+        kg_tc_animal = 0.0
+
+    # DMI de la dieta: ya no manda el cálculo, pero se sigue leyendo
+    # para el override por clima y para el diagnóstico de coherencia.
+    dmi_dieta = None
+    if dieta_v:
+        try:
+            dmi_dieta = float(dieta_v.get("consumo_ms_kg") or 0) or None
+        except (TypeError, ValueError):
+            dmi_dieta = None
+
+    if kg_tc_animal > 0:
+        fuente_kg = (
+            f"kg tal cual de la dieta del {dieta_v.get('fecha')}"
+            if dieta_v else "kg tal cual de la dieta"
         )
-        if dieta_v:
-            dmi_animal = dieta_v.get("consumo_ms_kg")
-            fuente_dmi = f"dieta del {dieta_v.get('fecha')}"
-            fase_vigente = dieta_v.get("observaciones") or ""
-    if dmi_animal is None or dmi_animal <= 0:
-        return None
+    else:
+        # Dieta vieja o incompleta: sin kg_tal_cual no queda otra que
+        # estimarlo desde el DMI y el % de inclusión. Es el cálculo que
+        # se probó impreciso, así que queda marcado en `fuente_kg` para
+        # que la pantalla lo pueda mostrar como estimado.
+        if not dmi_dieta or pct <= 0:
+            return None
+        kg_tc_animal = dmi_dieta * pct / 100.0
+        fuente_kg = (
+            "estimado desde DMI × % inclusión "
+            "(la dieta no trae kg tal cual)"
+        )
 
-    consumo_kg_dia = dmi_animal * cantidad * pct / 100.0
+    # Override de DMI (ej. ajuste por clima): se aplica como proporción
+    # sobre lo formulado, no como reemplazo. Si no hay DMI de dieta con
+    # el cual comparar, no hay proporción posible y se ignora.
+    dmi_animal = dmi_dieta
+    fuente_dmi = (
+        f"dieta del {dieta_v.get('fecha')}" if dieta_v else "sin dieta"
+    )
+    if dmi_kg_dia_override is not None and dmi_kg_dia_override > 0:
+        dmi_animal = dmi_kg_dia_override
+        fuente_dmi = "override"
+        if dmi_dieta and dmi_dieta > 0:
+            kg_tc_animal *= dmi_kg_dia_override / dmi_dieta
+
+    # Materia seca implícita: si el DMI y el % de la dieta fueran
+    # coherentes con los kg tal cual, esto tendría que dar entre 80% y
+    # 100%. Arriba de 100% es imposible y delata una dieta mal cargada
+    # (o un DMI que incluye forraje que la composición no lista).
+    ms_impl = None
+    if dmi_dieta and pct > 0 and kg_tc_animal > 0:
+        ms_impl = round(dmi_dieta * pct / 100.0 / kg_tc_animal * 100, 0)
+
+    consumo_kg_dia = kg_tc_animal * cantidad
     return {
         "kg_dia": round(consumo_kg_dia, 2),
+        "kg_tal_cual_animal": round(kg_tc_animal, 3),
         "pct_inclusion": round(pct, 1),
-        "dmi_kg_animal": round(dmi_animal, 2),
+        "dmi_kg_animal": round(dmi_animal, 2) if dmi_animal else None,
         "cantidad_animales": cantidad,
+        "fuente_kg": fuente_kg,
         "fuente_dmi": fuente_dmi,
+        "ms_implicita_pct": ms_impl,
         "fase_vigente": fase_vigente,
         "fecha_referencia": fecha_referencia,
     }
@@ -942,16 +1032,65 @@ def estimar_pv_ajustado_clima(
     return out
 
 
+# Días mínimos entre dos pesadas para creerle a la ganancia que sale de
+# restarlas. Con menos, el error de estimación del drone (o el efecto de
+# la balanza llena/vacía) pesa más que la ganancia real y sale cualquier
+# número.
+_DIAS_MIN_ENTRE_PESADAS = 15
+
+# Techos de cordura para la ganancia diaria medida. Negativa es posible
+# y real (un lote puede perder peso), pero no en cualquier magnitud.
+_ADPV_MEDIDO_MIN = -0.5
+_ADPV_MEDIDO_MAX = 3.0
+
+
+def _adpv_para_proyectar(
+    lote: Dict, pesadas_validas: List[Tuple],
+) -> Optional[float]:
+    """Ganancia diaria con la que proyectar hacia adelante desde la
+    última pesada.
+
+    Prioridad:
+      1) La MEDIDA entre las dos últimas pesadas — es lo que realmente
+         pasó, e incorpora sin querer todo lo que el objetivo ignora
+         (clima, sanidad, calidad del forraje).
+      2) El `adpv_objetivo_kg` del lote.
+      3) None si no hay ninguno de los dos.
+    """
+    if len(pesadas_validas) >= 2:
+        f_prev, peso_prev = pesadas_validas[-2]
+        f_ult, peso_ult = pesadas_validas[-1]
+        if f_prev is not None and f_ult is not None:
+            dias = (f_ult - f_prev).days
+            if dias >= _DIAS_MIN_ENTRE_PESADAS:
+                medido = (peso_ult - peso_prev) / dias
+                if _ADPV_MEDIDO_MIN <= medido <= _ADPV_MEDIDO_MAX:
+                    return medido
+    adpv_obj = float(lote.get("adpv_objetivo_kg") or 0)
+    return adpv_obj if adpv_obj > 0 else None
+
+
 def estimar_peso_vivo_lote(
     lote: Dict, fecha_ref: Optional[str] = None,
 ) -> float:
     """Estima el peso vivo promedio del lote a `fecha_ref`.
 
     Jerarquía:
-      1) Última pesada registrada ≤ fecha_ref (peso_promedio_kg).
+      1) Última pesada registrada ≤ fecha_ref, **proyectada hacia
+         adelante** hasta fecha_ref. La ganancia diaria con la que se
+         proyecta sale de las dos últimas pesadas si se puede medir
+         (eso es realidad, no objetivo); si no, del `adpv_objetivo_kg`.
       2) peso_ingreso_kg + ADPV objetivo × días desde fecha_ingreso.
       3) peso_ingreso_kg si no hay ADPV ni fecha_ingreso.
       4) 0 si no hay nada.
+
+    **Por qué se proyecta desde la pesada (arreglado el 31/07/2026).**
+    Antes se devolvía la última pesada tal cual, congelada. Como
+    `factor_escala_consumo_pv` calcula `peso_hoy / peso_a_la_fecha_de_
+    la_dieta` y las dos fechas caían sobre la MISMA última pesada, el
+    factor daba 1,000 y el escalado por peso quedaba anulado. O sea que
+    un lote con pesada del drone perdía el ajuste y uno sin datos sí lo
+    recibía: exactamente al revés de lo que corresponde.
 
     Args:
         lote: dict con peso_ingreso_kg, adpv_objetivo_kg, fecha_ingreso,
@@ -989,7 +1128,18 @@ def estimar_peso_vivo_lote(
                 pesadas_validas.append((fp, pp))
         if pesadas_validas:
             pesadas_validas.sort(key=lambda x: x[0] or _dt.min.date())
-            return pesadas_validas[-1][1]
+            f_ult, peso_ult = pesadas_validas[-1]
+            if f_ult is None or f_ref is None:
+                # Sin fechas usables no hay proyección posible; el peso
+                # medido sigue siendo mejor que nada.
+                return peso_ult
+            dias_desde = max(0, (f_ref - f_ult).days)
+            if dias_desde == 0:
+                return peso_ult
+            adpv_proy = _adpv_para_proyectar(lote, pesadas_validas)
+            if adpv_proy is None:
+                return peso_ult
+            return max(0.0, peso_ult + adpv_proy * dias_desde)
 
     # 2) Peso ingreso + ADPV × días
     peso_ingreso = float(lote.get("peso_ingreso_kg") or 0)

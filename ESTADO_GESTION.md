@@ -6,7 +6,7 @@
 > No borres el historial de decisiones: sirve para no volver a discutir lo
 > mismo. Si una decisión cambia, dejá la vieja y anotá por qué cambió.
 
-**Última actualización:** 29/07/2026
+**Última actualización:** 31/07/2026
 
 ---
 
@@ -54,6 +54,12 @@ clientes: es su centro de comando.
 
 | # | Tarea | Notas |
 |---|---|---|
+| — | **Corregir el `kg_tal_cual` de Fibroter en Ezequiel Pezzola** | Dice 0,400 y a campo son 1,10. Es dato, no código: el `pct_ms` de 33% sí es correcto |
+| — | Revisar las dietas con MS implícita > 100% | Jackie 177%, Pedro 112%, Mario 111%. El DMI incluye forraje que la composición no lista o lista con `pct_ms = 0` |
+| — | Cargar la fila de forraje en el lote de Jackie Graves | Lote "forraje aparte" sin ninguna fila de forraje: el DMI de 5,32 incluye ~2,7 kg MS de pastoreo que no está en la composición |
+| — | Enchufar `factor_escala_consumo_pv` en el camino del stock | Existe y lo usa la carga de silo, pero `calcular_consumo_diario_kg` no. Explica el 3-8% que falta |
+| — | Descontar del ADPV objetivo la pérdida por frío ya calculada | `impacto_productivo` la calcula y `impactos_lote` la guarda, pero la proyección de peso sigue usando el objetivo plano |
+| — | Sumar el plus de mantenimiento por frío al consumo | `dmi.py` lo calcula. Es el efecto opuesto al anterior: hay que aplicar los dos o ninguno |
 | — | Commitear y pushear el fix de `SMTP_BCC_CLIENTES` | El bug sigue vivo en producción hasta el push |
 | — | `CARGA_BASE_URL` apunta a un túnel ngrok free de la Mac | Bloqueante real del 482: la URL muere al reiniciar ngrok |
 | — | El dashboard sigue mostrando "Reponer HOY" con historial incompleto | `dashboard_precompute.py:129` solo excluye `sin_entregas` |
@@ -69,6 +75,48 @@ clientes: es su centro de comando.
 | — | Crear Roxdan y La Esperanza Argentina como clientes | Para poder guardar las recorridas del drone en ficha |
 
 ## Cosas que conviene saber antes de tocar
+
+- **DECISIÓN DE MODELO (31/07/2026): el consumo diario de producto sale
+  de `kg_tal_cual` de la dieta, NO de `DMI × pct_ms / 100`.** La fórmula
+  vieja devolvía kg de MATERIA SECA, y todo lo que hay del otro lado de
+  la resta — entregas, bolsas de 30 kg, stock — está en producto TAL
+  CUAL: se restaban unidades distintas. Además `consumo_ms_kg` y
+  `pct_ms` no cierran con `kg_tal_cual` en la mayoría de las dietas
+  reales, porque el DMI incluye forraje que la composición no lista.
+  **La prueba: la materia seca implícita** (`DMI × pct_ms / 100 /
+  kg_tal_cual`) **daba 217%, 177%, 112%, 111% y 88% en los 5 lotes de
+  producción.** Arriba de 100% es físicamente imposible. Contra los
+  valores que Mauricio validó a campo, `kg_tal_cual` se desvía 3-8% y
+  la fórmula vieja se desviaba −21% a +72%. `calcular_consumo_diario_kg`
+  ahora devuelve `ms_implicita_pct` justamente para poder detectar
+  dietas mal cargadas sin tener que ir a mirarlas de a una.
+
+- **El consumo TIENE que escalar con el peso vivo** (dicho por Mauricio,
+  30 y 31/07): se proyecta la evolución del peso por días y ganancia, y
+  el consumo se actualiza como un porcentaje del peso vivo según la
+  categoría; después esa proyección se ajusta con la balanza o con la
+  estimación del drone. La pieza ya existe —
+  `factor_escala_consumo_pv`— pero **solo la usa el camino de la carga
+  de silocomedero**. El camino del stock y las alertas todavía no, y
+  ahí está el 3-8% que falta después de pasar a `kg_tal_cual`.
+
+- **Y la ganancia de peso varía con el clima** (Mauricio, 31/07), que es
+  lo que explica que la proyección se fuera 17-27% arriba en los CINCO
+  lotes a la vez: cinco lotes errando para el mismo lado no es
+  casualidad, es una variable común, y los lotes son de mayo — pleno
+  invierno en La Pampa. **Son dos efectos opuestos y hay que aplicar
+  los dos o ninguno:** con frío el animal gasta más en mantenimiento y
+  COME MÁS por kilo de peso vivo, pero GANA MENOS y por lo tanto pesa
+  menos que lo proyectado. Corregir solo por peso sobreestima;
+  corregir solo por mantenimiento subestima. El neto es ese 3-8%.
+  Las dos piezas ya están escritas y ninguna llega a la proyección de
+  peso: `dmi.py` (DMI ajustado por frío, calor, humedad, viento, barro,
+  pelaje mojado y acumulación; `dmi_base_kg` es literalmente "% del PV
+  según categoría") e `impacto_productivo.py::estimar_impacto_frio`,
+  que devuelve `adpv_perdida_kg_rango` — cuántos kg/día de ganancia
+  perdió el lote en cada evento. La tabla `impactos_lote` guarda ese
+  historial con `clima_resumen_json` y estado "confirmado (recalculado
+  con clima histórico real)".
 
 - **DECISIÓN DE MODELO (30/07/2026): el stock de producto se lleva por
   CLIENTE + PRODUCTO, no por lote.** Mauricio lo confirmó preguntándole
@@ -192,6 +240,94 @@ clientes: es su centro de comando.
   base SQLite temporal.
 
 ## Historial de sesiones
+
+### 31/07/2026 — El consumo no estaba mal cargado: estaba leyendo el campo equivocado
+
+Venía a corregir los 5 valores de consumo que Mauricio validó a campo.
+No hacía falta corregir ninguno: los 5 salen de una cuenta que usa el
+campo equivocado de la dieta.
+
+  - **Diagnóstico primero.** `scripts/../diag_consumo.py` (read-only,
+    corre en la Mac porque el sandbox de la nube no tiene salida a
+    Supabase) reconstruye por lote los dos caminos de cálculo que hoy
+    conviven: el del stock (`DMI × pct_ms / 100`, materia seca) y el de
+    la carga de silo (`kg_tal_cual × factor peso vivo`, tal cual). La
+    columna que resolvió todo fue la **materia seca implícita**.
+
+| Cliente | Producto | Sistema | `kg_tal_cual` | Campo | MS impl |
+|---|---|---|---|---|---|
+| Ezequiel Pezzola | Fibroter | 0,868 | **0,400** | 1,10 | **217%** |
+| Jackie Graves | Fibrogreen Plus | 1,064 | 0,600 | 0,62 | 177% |
+| Mario Salvadori | Fibrogreen Plus | 1,332 | 1,200 | 1,28 | 111% |
+| Miguel Bergondi | Fibrogreen | 0,795 | 0,900 | 0,98 | 88% |
+| Pedro M. Pezzola | Fibrogreen Plus | 0,786 | 0,700 | 0,75 | 112% |
+
+  - La columna "Sistema" reproduce exactamente los 5 valores anotados
+    el 30/07 (0,86 / 1,06 / 1,33 / 0,80 / 0,79), así que la
+    reconstrucción es fiel. **`kg_tal_cual` le pega a la realidad con
+    3-8% de error; la fórmula vieja erraba entre −21% y +72%.**
+  - **Cambiado `calcular_consumo_diario_kg`** para que use
+    `kg_tal_cual × cantidad`. Se conservan todas las claves del dict
+    que devolvía (nadie fuera de `stock_producto.py` lee
+    `pct_inclusion` ni `dmi_kg_animal`, pero se dejan por las dudas) y
+    se agregan `kg_tal_cual_animal`, `fuente_kg` y `ms_implicita_pct`.
+  - **Tres decisiones de borde, por si se revisan después:**
+    1. Dieta vieja sin `kg_tal_cual` → cae a la fórmula anterior, pero
+       `fuente_kg` queda marcado como "estimado" para que la pantalla
+       lo pueda distinguir. Sin `kg_tal_cual` **y** sin DMI devuelve
+       None: no se inventa un número.
+    2. El `dmi_kg_dia_override` (ajuste por clima) ya no reemplaza el
+       consumo, lo **escala** por `override / DMI_de_la_dieta`. Es la
+       intención original: comen un x% más o menos que lo formulado.
+    3. Un ingrediente con `pct_ms = 0` pero `kg_tal_cual` cargado (el
+       "Rollo a voluntad" de Mario y Pedro) antes devolvía None porque
+       la función salía por `pct <= 0`. Ahora se puede seguir. Es
+       inocuo para las alertas: sin entregas cargadas el diagnóstico
+       da `sin_entregas`, que `clientes_con_stock_bajo` ya excluye.
+  - **Verificado:** `scripts/test_consumo_tal_cual.py`, 30 casos contra
+    SQLite temporal, todos OK. Cubre los 5 lotes reales, plan de
+    adaptación de 3 fases, bajas del lote, override de clima, dieta sin
+    `kg_tal_cual`, producto ausente, y una prueba punta a punta de
+    stock donde la fórmula vieja prometía 14 días y la nueva 8.
+    `py_compile` OK y `nombres_huerfanos.py` sin huérfanos.
+  - **Lo que el cambio NO arregla:** el `kg_tal_cual` de Fibroter en
+    Ezequiel (0,400) es un dato roto y sigue roto — el test lo deja
+    marcado a propósito en vez de taparlo. Y falta el escalado por peso
+    vivo, que es el 3-8% restante (ver "Cosas que conviene saber").
+**Segunda parte — la pesada del drone apagaba el escalado por peso.**
+Mauricio marcó que la ganancia varía con el clima y que ese dato lo
+tienen. Buscando dónde entra, apareció un bug peor.
+
+  - `estimar_peso_vivo_lote` prioriza bien: si hay pesada real, la usa
+    antes que la proyección. Pero **la devolvía congelada**, sin
+    proyectar hacia adelante desde la fecha de la pesada. Como
+    `factor_escala_consumo_pv` hace `peso_hoy / peso_a_la_fecha_de_la_
+    dieta` y las dos fechas caían sobre la MISMA última pesada, el
+    factor daba **1,000 exacto**. Un lote con pesada del drone perdía
+    el ajuste por peso y uno sin datos sí lo recibía: al revés de lo
+    que corresponde, y justo en los lotes mejor medidos.
+  - **Arreglado:** ahora se proyecta desde la última pesada. La
+    ganancia con la que se proyecta sale, si se puede medir, **de las
+    dos últimas pesadas** — eso es lo que realmente pasó, e incorpora
+    sin modelarlo el efecto del clima, la sanidad y la calidad del
+    forraje. Si no se puede medir, cae al `adpv_objetivo_kg`.
+  - Dos guardas para no comerse el ruido del drone: se exige un mínimo
+    de 15 días entre pesadas (`_DIAS_MIN_ENTRE_PESADAS`) y la ganancia
+    medida tiene que caer entre −0,5 y 3,0 kg/día. Fuera de eso, cae al
+    objetivo. La pérdida de peso real sí se respeta: es dato, no error.
+  - **Verificado:** `scripts/test_peso_proyectado.py`, 22 casos, todos
+    OK. Cubre el bug original, ganancia medida vs objetivo, pesadas
+    demasiado juntas, ganancia absurda, pérdida de peso, lote sin
+    pesadas (no cambia nada), pesada del mismo día, pesada futura, el
+    techo de 1,40 y la carga de silo punta a punta. Los 30 casos de
+    `test_consumo_tal_cual.py` siguen pasando.
+  - **Ojo para la próxima:** los factores 1,17-1,27 que salieron del
+    diagnóstico usan el camino del `adpv_objetivo_kg`. En los lotes que
+    tengan pesadas cargadas, el número real puede ser bastante menor.
+    Antes de enchufar el escalado en el camino del stock conviene
+    correr un diagnóstico de pesadas reales contra peso proyectado.
+
+  - **Sin pushear todavía:** en producción el cálculo viejo sigue vivo.
 
 ### 30/07/2026 (noche) — El consumo por animal está mal cargado, y además NO debería ser fijo
 
